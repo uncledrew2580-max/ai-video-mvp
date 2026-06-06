@@ -53,8 +53,43 @@ for (const f of walk(NM)) {
 console.log(`[native] scanned ${total} .node files across ${mods.size} modules`);
 if (total === 0) { console.error('[native] FAIL: no native addons found — npm ci did not build win32 binaries'); process.exit(1); }
 if (bad.length) {
-  console.error(`[native] FAIL: ${bad.length} non-win32-x64 addon(s) (Mac hard-copy or wrong arch):`);
+  console.error(`[native] FAIL: ${bad.length} non-win32-x64 addon(s) (Mac/linux hard-copy or wrong arch):`);
   for (const b of bad.slice(0, 20)) console.error('  - ' + b);
   process.exit(1);
 }
-console.log('[native] PASS: all native addons are win32-x64 PE (built on the runner).');
+
+// Explicitly fail if any darwin/linux platform package leaked into the Windows tree.
+const LEAK_DIRS = [
+  '@img/sharp-darwin-arm64', '@img/sharp-darwin-x64', '@img/sharp-linux-x64', '@img/sharp-linux-arm64',
+  '@img/sharp-libvips-darwin-arm64', '@img/sharp-libvips-darwin-x64', '@img/sharp-libvips-linux-x64',
+];
+const leaks = LEAK_DIRS.filter((d) => fs.existsSync(path.join(NM, ...d.split('/'))));
+if (leaks.length) {
+  console.error('[native] FAIL: non-win32 platform packages present (Mac/linux hard-copy):');
+  for (const l of leaks) console.error('  - ' + l);
+  process.exit(1);
+}
+
+// Key modules the runtime depends on — confirm each has a win32-x64 addon present.
+const KEY = {
+  'sharp (win32-x64 prebuilt)': '@img/sharp-win32-x64',
+  'sqlite3': 'sqlite3',
+  '@parcel/watcher': path.join('@parcel', 'watcher'),
+  'cpu-features': 'cpu-features',
+};
+let keyMissing = 0;
+for (const [label, rel] of Object.entries(KEY)) {
+  const dir = path.join(NM, rel);
+  if (!fs.existsSync(dir)) { console.warn(`[native] note: ${label} not present (may be optional/transitive)`); continue; }
+  const found = [...walk(dir)];
+  if (found.length === 0) {
+    // sharp-win32-x64 ships a .node; sqlite3/parcel/cpu-features should too if used.
+    if (rel === '@img/sharp-win32-x64') { console.error(`[native] FAIL: ${label} present but has no .node binary`); keyMissing++; }
+    else console.log(`[native] ${label}: present (no nested .node — ok if pure-js wrapper)`);
+  } else {
+    console.log(`[native] ${label}: ${found.length} win32-x64 .node ✅`);
+  }
+}
+if (keyMissing) process.exit(1);
+
+console.log('[native] PASS: all native addons are win32-x64 PE; no darwin/linux leak; key modules OK.');

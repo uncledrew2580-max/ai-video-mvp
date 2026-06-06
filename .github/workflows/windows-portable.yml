@@ -32,12 +32,33 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Install win32-x64 native modules (npm ci — built ON Windows)
-        run: npm ci
-        env:
-          npm_config_build_from_source: 'false'
+      # Pin Python 3.11 for node-gyp: Python 3.12 removed distutils, which
+      # node-gyp@8.x imports during configure. 3.11 still ships distutils.
+      - name: Setup Python 3.11 (node-gyp toolchain)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Verify native modules are win32-x64 (no darwin hard-copy)
+      - name: Install win32-x64 native modules (npm ci --include=optional, ON Windows)
+        shell: pwsh
+        env:
+          # Force optional platform packages (e.g. @img/sharp-win32-x64) to install,
+          # and steer prebuilt selection at win32-x64 so sharp uses its prebuilt
+          # binary instead of falling back to a node-gyp source build.
+          npm_config_include: optional
+          npm_config_platform: win32
+          npm_config_arch: x64
+          npm_config_python: ${{ env.pythonLocation }}\python.exe
+        run: npm ci --include=optional
+
+      - name: sharp smoke test (prebuilt loaded, not source-built)
+        shell: pwsh
+        run: |
+          node -e "const s=require('sharp'); console.log('sharp versions:', JSON.stringify(s.versions))"
+          if (-not (Test-Path 'node_modules/@img/sharp-win32-x64')) { Write-Error '@img/sharp-win32-x64 not installed'; exit 1 }
+          Write-Host '@img/sharp-win32-x64 present OK'
+
+      - name: Verify native modules are win32-x64 (no darwin/linux hard-copy)
         shell: pwsh
         run: node scripts/win/verify-native-modules.mjs
 
