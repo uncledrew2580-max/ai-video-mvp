@@ -53,12 +53,6 @@ diagnostics/
 *.tgz
 *.icns
 
-# ── P14-A1 drafts ignored until workflow is completed ────────────────────────
-# These reference helper scripts/tests not yet created; committing now would make
-# the first GitHub Actions run fail. Kept on disk, excluded from the P14-A0 commit.
-.github/workflows/windows-portable.yml
-scripts/win/
-
 # ── Local agent / editor state (machine-specific, not project source) ────────
 .claude/
 

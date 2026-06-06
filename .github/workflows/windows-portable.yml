@@ -1,0 +1,89 @@
+name: Windows Portable RC (x64)
+
+# P14-A1: build a Windows x64 portable RC on a real Windows runner.
+# Mac is only the command machine — native modules are built here on Windows
+# (never hard-copied from macOS). No installer/MSI, portable zip only.
+# Trigger manually (workflow_dispatch) or on changes to the CI itself.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/windows-portable.yml'
+      - 'scripts/win/**'
+      - 'tests/nonpaid/p14-windows-final-merge.test.mjs'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      NODE_VERSION: 24.14.0
+      NODE_EXE_SHA256: 63c259c81e5d472b5f11c8d506070130cb04a1ecf84b80377a34ed6ec9048088
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Install win32-x64 native modules (npm ci — built ON Windows)
+        run: npm ci
+        env:
+          npm_config_build_from_source: 'false'
+
+      - name: Verify native modules are win32-x64 (no darwin hard-copy)
+        shell: pwsh
+        run: node scripts/win/verify-native-modules.mjs
+
+      - name: Fetch official Windows node.exe (+ verify SHA256)
+        shell: pwsh
+        run: node scripts/win/fetch-node-exe.mjs
+
+      # Build a CLEAN LGPL ffmpeg.exe from source via MSYS2/mingw64, using the
+      # SAME minimal flags as the frozen Mac 0010 build. This guarantees the
+      # configuration string contains NO gpl/nonfree/libx264/libx265/libfdk tokens.
+      - name: Setup MSYS2 (mingw64) for ffmpeg
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-nasm
+            make
+            diffutils
+
+      - name: Build clean LGPL ffmpeg.exe from source
+        shell: msys2 {0}
+        run: bash scripts/win/build-ffmpeg-lgpl.sh
+
+      - name: Verify ffmpeg.exe license (configuration clean LGPL)
+        shell: pwsh
+        run: node scripts/win/verify-ffmpeg-license.mjs
+
+      - name: Windows nonpaid tests (mock-clip final merge via -c copy)
+        shell: pwsh
+        env:
+          AI_VIDEO_FFMPEG_PATH: ${{ github.workspace }}\runtime\bin\ffmpeg.exe
+        run: node --test tests/nonpaid/p14-windows-final-merge.test.mjs
+
+      - name: Assemble portable + zip + manifest + SHA256
+        shell: pwsh
+        run: node scripts/win/assemble-windows-portable.mjs
+
+      - name: Upload portable zip artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Video-Win-x64-Portable-RC-0001
+          path: |
+            dist-win/AI-Video-Win-x64-Portable-RC-0001.zip
+            dist-win/AI-Video-Win-x64-Portable-RC-0001.zip.sha256
+            dist-win/runtime-manifest.json
+          if-no-files-found: error
