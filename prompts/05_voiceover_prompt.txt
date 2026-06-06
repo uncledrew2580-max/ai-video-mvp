@@ -1,0 +1,28 @@
+[prompt_name] voiceover
+[prompt_version] v1.0
+[updated_at] 2026-04-29
+[is_active] true
+
+# 可微调区域
+# - 口播风格
+# - CTA 强度
+# - 情绪强度
+#
+# 不可随便改区域
+# - 必须服从 target_language
+# - 不要机器翻译感
+# - 口播必须能在 clip 时长内说完
+
+请根据 script_json、selected_concept、product_context 和 creative_task_type_rules，为每个 scene 生成目标语言口播文案。
+
+规则：
+1. 使用 target_language。
+2. 表达要像本地 TikTok creator 的真实分享。
+3. 不要书面广告腔。
+4. CTA 自然融入最后 1-2 个镜头。
+5. 每条口播必须能在对应 clip_duration_seconds 内说完。
+
+输出 JSON：
+- project_id
+- voiceover_language
+- clips

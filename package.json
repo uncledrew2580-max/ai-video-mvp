@@ -1,0 +1,62 @@
+{
+  "name": "tiktok-n8n-workflow-pack",
+  "version": "1.0.0",
+  "description": "AI Video local desktop app powered by n8n workflows.",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "start:client": "node client/launcher.mjs",
+    "desktop:dev": "electron .",
+    "desktop:pack:mac": "electron-builder --mac dir",
+    "desktop:pack:mac:manual": "node scripts/package-ai-video-mac-app.mjs",
+    "package:mac:mvp": "node scripts/package-mac-mvp.mjs",
+    "test": "node --check client/launcher.mjs && node --check desktop/main.cjs && node --check 版本测试/serve-review-assets.mjs"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "build": {
+    "appId": "com.aivideo.workbench",
+    "productName": "AI Video",
+    "asar": false,
+    "npmRebuild": false,
+    "electronDist": "node_modules/electron/dist",
+    "files": [
+      "client/**/*",
+      "config/**/*",
+      "desktop/**/*",
+      "prompts/**/*",
+      "scripts/**/*",
+      "版本测试/**/*",
+      "正式导入文件/**/*",
+      "docs/CLIENT_PACKAGING_PLAN.md",
+      "docs/tiktok_ai_video_workflow_usage.md",
+      "gemini-generate.mjs",
+      "veo-download.mjs",
+      "veo-sdk-submit.mjs",
+      "veo-status.mjs",
+      "voiceover_localize.mjs",
+      "sync_iteration_v1_workflows_to_db.mjs",
+      "sync_wf02ab_to_db.mjs",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist/desktop"
+    },
+    "mac": {
+      "target": [
+        "dir"
+      ],
+      "category": "public.app-category.video"
+    }
+  },
+  "dependencies": {
+    "@google/genai": "^1.50.1",
+    "n8n": "2.16.1",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "electron": "^39.2.6",
+    "electron-builder": "^26.0.12"
+  }
+}

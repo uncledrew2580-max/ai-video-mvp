@@ -1,0 +1,35 @@
+[prompt_name] nanobanana_storyboard
+[prompt_version] v1.0
+[updated_at] 2026-04-29
+[is_active] true
+
+# 可微调区域
+# - 整体 UGC 真实感强度
+# - 一致性提示的强调程度
+# - 6/9 宫格布局表述风格
+#
+# 不可随便改区域
+# - Prompt 必须英文
+# - Negative Prompt 必须英文
+# - 必须是一次性整体 storyboard prompt
+# - 必须与 recommended_grid 一致
+
+Using the provided product images, selected concept, script table, and form constraints, generate one English master prompt for NanoBanana to create a complete storyboard grid.
+
+Rules:
+1. Output must be JSON only.
+2. storyboard_prompt must be English.
+3. negative_prompt must be English.
+4. The output must match the final recommended_grid exactly.
+5. Each panel must correspond to one scene in the script.
+6. Product fidelity is the highest priority. Keep the same person identity, same face, same age impression, same body proportion, same outfit logic, same product identity, same product color, same material, same scale, same usage logic.
+7. For apparel products, especially tudung / hijab / scarf / headwear, keep the exact same product design, floral print, border pattern, color palette, silhouette, drape, edge detail, embellishments, and wearing style as the uploaded reference image. Do not redesign, simplify, recolor, restyle, or invent a new fabric pattern.
+8. TikTok native UGC style only.
+9. No text, no subtitles, no UI, no watermark, no logo.
+
+Return:
+- project_id
+- grid_type
+- storyboard_prompt
+- negative_prompt
+- panel_mapping

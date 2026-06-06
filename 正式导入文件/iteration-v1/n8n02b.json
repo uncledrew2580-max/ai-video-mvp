@@ -1,0 +1,560 @@
+{
+  "id": "storyboardGenerateV1",
+  "name": "TikTok续跑｜脚本确认→分镜图生成",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "storyboard-generate-v1",
+        "responseMode": "onReceived",
+        "options": {
+          "noResponseBody": true,
+          "responseCode": {
+            "values": {
+              "responseCode": 204
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -900,
+        80
+      ],
+      "id": "storyboard-generate-webhook-v1",
+      "name": "storyboard_generate_resume"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst os = require('os');\nconst process = require('process');\n\nconst body = $input.first().json?.body || $input.first().json || {};\nconst projectId = String(body.project_id || '').trim();\nif (!projectId) throw new Error('读取脚本上下文：缺少 project_id');\n\nfunction projectRoot() {\n  const env = require('process').env || {};\n  return env.TIKTOK_WORKFLOW_ROOT || env.PROJECT_ROOT || process.cwd();\n}\n\nconst root = projectRoot();\nconst dataRoot = require('process').env.WORKFLOW_DATA_ROOT || path.join(os.homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data') || require('process').env.AI_VIDEO_RUNTIME_ROOT || root;\nconst scriptContextDir = path.join(dataRoot, '.n8n-local-cache', 'script-context');\nconst fileName = 'script_context_' + projectId.replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json';\nconst filePath = path.join(scriptContextDir, fileName);\n\nif (!fs.existsSync(filePath)) {\n  throw new Error('读取脚本上下文：找不到脚本上下文文件 ' + filePath + '。请先运行 WF02A 生成脚本。');\n}\n\nconst scriptContext = JSON.parse(fs.readFileSync(filePath, 'utf8'));\n\n// Apply user overrides to shots if present\nconst overridesFileName = 'script_user_overrides_' + projectId.replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json';\nconst overridesPath = path.join(scriptContextDir, overridesFileName);\nlet userOverrides = {};\nif (fs.existsSync(overridesPath)) {\n  try { userOverrides = JSON.parse(fs.readFileSync(overridesPath, 'utf8')); } catch (e) {}\n}\n\nlet shots = Array.isArray(scriptContext.shots) ? [...scriptContext.shots] : [];\nif (Array.isArray(userOverrides.shots) && userOverrides.shots.length > 0) {\n  const overrideMap = {};\n  for (const ov of userOverrides.shots) {\n    if (ov.shot_id) overrideMap[ov.shot_id] = ov;\n  }\n  shots = shots.map(shot => {\n    const ov = overrideMap[shot.shot_id];\n    return ov ? { ...shot, ...ov } : shot;\n  });\n}\n\n// Update project-state: stage = storyboard_generating\nconst projectStateDir = path.join(dataRoot, '.n8n-local-cache', 'project-state');\nconst projectStatePath = path.join(projectStateDir, 'project_' + projectId.replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json');\nlet projectState = {};\ntry { if (fs.existsSync(projectStatePath)) projectState = JSON.parse(fs.readFileSync(projectStatePath, 'utf8')); } catch (e) {}\nprojectState.stage = 'storyboard_generating';\nprojectState.updated_at = new Date().toISOString();\nfs.writeFileSync(projectStatePath, JSON.stringify(projectState, null, 2));\n\nreturn [{\n  json: {\n    ...scriptContext,\n    shots,\n    user_overrides_applied: Object.keys(userOverrides).length > 0,\n    review_round: Number(body.review_round || scriptContext.review_round || 1),\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        80
+      ],
+      "id": "wf02b-read-script-context-node-v1",
+      "name": "读取脚本上下文"
+    },
+    {
+      "parameters": {
+        "content": "## WF02B — 脚本确认 → 分镜图生成\n\n用户确认/编辑脚本后调用此 Webhook，读取 script_context.json（含用户 overrides），生成 NanoBanana 分镜图，写入 review_context.json，然后停止等待人工审核分镜。",
+        "height": 130,
+        "width": 980,
+        "color": 3
+      },
+      "id": "wf02b-sticky-entry",
+      "name": "阶段说明｜WF02B入口",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -940,
+        -350
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst os = require('os');\n\nconst input = $input.first();\nconst baseJson = input?.json || {};\nconst baseBinary = input?.binary || {};\n\nfunction projectRoot() {\n  const env = require('process').env || {};\n  const candidates = [env.TIKTOK_WORKFLOW_ROOT, env.PROJECT_ROOT, require('process').cwd()].filter(Boolean);\n  for (const root of candidates) {\n    try { if (fs.existsSync(path.join(root, 'prompts', 'prompt_center.json'))) return root; } catch (_e) {}\n  }\n  throw new Error('Prompt Library: prompts/prompt_center.json not found. Checked: ' + candidates.join(', '));\n}\n\nfunction readJsonIfExists(filePath) {\n  try {\n    if (fs.existsSync(filePath)) {\n      return JSON.parse(fs.readFileSync(filePath, 'utf8'));\n    }\n  } catch (error) {}\n  return {};\n}\n\nconst root = projectRoot();\nconst prompts = readJsonIfExists(path.join(root, 'prompts', 'prompt_center.json'));\nif (!Object.keys(prompts).length) {\n  throw new Error('Prompt Library: 无法读取 prompts/prompt_center.json，请检查 TIKTOK_WORKFLOW_ROOT/PROJECT_ROOT 或项目目录位置');\n}\n\nconst legacy = readJsonIfExists(path.join(root, 'tiktok-workflow-prompts.json'));\nconst fallbackStoryboardGrid = {\n  cols: 3,\n  rows: 2,\n  panel_aspect: '9:16',\n  normalize_canvas_aspect: '27:32',\n  supported_panel_counts: [6],\n  supported_layouts: { '6': '3x2 => 27:32' },\n  crop_inset_ratio: 0.01,\n  output_mime_type: 'image/jpeg',\n  output_extension: 'jpg',\n  jpeg_quality: 90,\n  panel_output_width: 1080,\n  panel_output_height: 1920,\n  panel_order: 'row_major_left_to_right',\n};\nconst fallbackCreativeTaskTypeMapping = {\n  _meta: { version: 'runtime-fallback', description: '最小创作任务映射，完整配置优先来自 prompt_center.json' },\n  '种草': { video_type: 'local_voiceover', recommended_grid: '6_grid' },\n  '口播': { video_type: 'local_voiceover', recommended_grid: '6_grid' },\n  '开箱': { video_type: 'pure_display_or_light_voiceover', recommended_grid: '6_grid' },\n  '产品展示': { video_type: 'mixed', recommended_grid: '6_grid' },\n  '痛点前置': { video_type: 'local_voiceover', recommended_grid: '6_grid' },\n  '自由创作': { video_type: 'mixed', recommended_grid: '6_grid' },\n  '故事剧情带货': { video_type: 'story_drama', recommended_grid: '6_grid' },\n  '真实故事剧情': { video_type: 'story_drama', recommended_grid: '6_grid' },\n  '爆点故事剧情': { video_type: 'story_drama', recommended_grid: '6_grid' },\n};\n\nconst runtimePrompts = {\n  ...prompts,\n  storyboard_grid: prompts.storyboard_grid || legacy.storyboard_grid || fallbackStoryboardGrid,\n  creative_task_type_mapping: prompts.creative_task_type_mapping || legacy.creative_task_type_mapping || fallbackCreativeTaskTypeMapping,\n};\n\nreturn [{ json: { ...baseJson, ...runtimePrompts }, binary: baseBinary }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        -220
+      ],
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Prompt Library"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        660,
+        540
+      ],
+      "id": "966fe855-e2c3-4d7a-a9b8-b048398b27b0",
+      "name": "Merge3_6grid"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst item = $input.first();\nconst json = item.json || {};\nconst binary = item.binary || {};\n\nlet image1Base64 = json.image_1_base64 || '';\nlet image2Base64 = json.image_2_base64 || '';\n\nconst imagePaths = Array.isArray(json.product_image_local_paths) ? json.product_image_local_paths : [];\nconst metaImages = Array.isArray(json.product_images_meta) ? json.product_images_meta : [];\nconst image1Path = json.image_1_path || imagePaths[0] || metaImages[0]?.path || '';\nconst image2Path = json.image_2_path || imagePaths[1] || metaImages[1]?.path || '';\nconst explicitImageCount = Number(json.product_image_count ?? json.image_count ?? 0);\nconst imageCount = Math.max(explicitImageCount, imagePaths.length, metaImages.length);\n\nif (!image1Base64 && imageCount >= 1 && image1Path && fs.existsSync(image1Path)) {\n  image1Base64 = fs.readFileSync(image1Path).toString('base64');\n}\nif (!image2Base64 && imageCount >= 2 && image2Path && fs.existsSync(image2Path)) {\n  image2Base64 = fs.readFileSync(image2Path).toString('base64');\n}\ntry {\n  if (!image1Base64 && imageCount >= 1) {\n    const img1 = await this.helpers.getBinaryDataBuffer(0, 'product_images_0');\n    image1Base64 = img1.toString('base64');\n  }\n} catch (e) {}\ntry {\n  if (!image2Base64 && imageCount >= 2) {\n    const img2 = await this.helpers.getBinaryDataBuffer(0, 'product_images_1');\n    image2Base64 = img2.toString('base64');\n  }\n} catch (e) {}\n\nconst mime1 = binary.product_images_0?.mimeType || json.image_1_mime || metaImages[0]?.mimeType || 'image/jpeg';\nconst mime2 = binary.product_images_1?.mimeType || json.image_2_mime || metaImages[1]?.mimeType || 'image/jpeg';\n\nconst shots = json.shots || [];\nconst expectedTotalPanels = shots.length;\nconst expectedLayoutLabel = '6-panel (3x2, target 27:32)';\n\nif (expectedTotalPanels !== 6) {\n  throw new Error('分镜提示词生成前校验失败：当前工作流已强制六宫格，shots 数量必须为 6，实际为 ' + expectedTotalPanels);\n}\n\nlet fullScriptJson = {\n  script_overview: {\n    selected_concept_name_original: json.selected_concept_name_original || '',\n    script_concept_label: json.script_concept_label || '',\n    script_goal: json.script_goal || '',\n    visual_style: json.visual_style || '',\n    identified_product_type: json.identified_product_type || '',\n    product_presentation_logic: json.product_presentation_logic || '',\n    core_visual_focus: json.core_visual_focus || '',\n    total_shots: json.total_shots || 6,\n    hook_strategy: json.hook_strategy || '',\n    target_user: json.target_user || '',\n    usage_scene: json.usage_scene || '',\n    visual_expression: json.visual_expression || '',\n    model_profile: json.model_profile || '',\n    core_selling_angle: json.core_selling_angle || '',\n  },\n  shots,\n};\n\nif (json.full_script_json) {\n  try { fullScriptJson = JSON.parse(json.full_script_json); } catch (e) {}\n}\n\nfunction tpl(str, vars) {\n  let out = str;\n  for (const [k, v] of Object.entries(vars)) {\n    out = out.split('{{' + k + '}}').join(v == null ? '' : String(v));\n  }\n  return out;\n}\n\nconst prompts = $('Prompt Library').first().json;\nconst sb = prompts.storyboard;\n\nconst userText = tpl(sb.user_template, {\n  project_id: json.project_id || '',\n  product_name: json.product_name || '',\n  target_market: json.target_market || '',\n  target_language: json.target_language || '',\n  creative_task_type: json.creative_task_type || '',\n  selected_concept_name_original: json.selected_concept_name_original || '',\n  script_concept_label: json.script_concept_label || '',\n  script_goal: json.script_goal || '',\n  visual_style: json.visual_style || '',\n  identified_product_type: json.identified_product_type || '',\n  product_presentation_logic: json.product_presentation_logic || '',\n  core_visual_focus: json.core_visual_focus || '',\n  hook_strategy: json.hook_strategy || '',\n  expected_total_panels: String(expectedTotalPanels),\n  expected_layout_label: expectedLayoutLabel,\n  full_script_json: JSON.stringify(fullScriptJson, null, 2),\n  shots_json: JSON.stringify(shots, null, 2),\n});\n\nconst hardConstraintBlock = [\n  '',\n  '【Form 业务硬约束】',\n  '- target_market 必须严格使用：' + (json.target_market || ''),\n  '- target_language（视频字幕/口播/台词的目标语言，不是 JSON 字段的输出语言）：' + (json.target_language || ''),\n  '- 【输出语言强制要求】所有 JSON 审核字段（concept_name、core_selling_angle、target_user、pain_point、usage_scene、visual_expression 等）必须使用中文，禁止用 target_language 作为 JSON 字段的输出语言。',\n  '- creative_task_type 必须严格使用：' + (json.creative_task_type || ''),\n  '- creative_task_type_rules：' + (json.creative_task_type_rules_json || '{}'),\n  '- recommended_grid：' + (json.recommended_grid || '6_grid'),\n  '- selected_concept 是人工选择后的硬约束，不允许推翻。',\n  '- product_image_count：' + imageCount,\n  json.target_user ? '- target_user（目标用户，硬约束）：' + json.target_user : '',\n  json.model_profile ? '- model_profile（人物/模特设定，硬约束）：' + json.model_profile : '',\n  json.usage_scene ? '- usage_scene（使用场景，硬约束）：' + json.usage_scene : '',\n  json.visual_expression ? '- content_style（内容风格，硬约束）：' + json.visual_expression : '',\n  json.hook_strategy ? '- hook_strategy（视觉Hook，硬约束）：' + json.hook_strategy : '',\n  json.core_selling_angle ? '- core_selling_angle（核心卖点切入，硬约束）：' + json.core_selling_angle : '',\n  json.model_profile ? '- 人物参考规则：如果 model_profile 要求更换人物/模特，上传产品图片只能作为产品外观、颜色、材质、结构参考；不要复制上传图片中的人物脸、五官、身份或模特外貌。' : '',\n  json.model_profile ? '- 分镜人物规则：每个 panel 的人物必须服从 model_profile；产品必须服从上传产品图。人物参考和产品参考必须分离。' : '',\n].filter(Boolean).join('\\n');\n\nconst parts = [{ text: userText + hardConstraintBlock }];\nif (imageCount >= 1 && image1Base64) parts.push({ inline_data: { mime_type: mime1, data: image1Base64 } });\nif (imageCount >= 2 && image2Base64) parts.push({ inline_data: { mime_type: mime2, data: image2Base64 } });\n\nreturn [\n  {\n    json: {\n      ...json,\n      image_1_path: image1Path,\n      image_2_path: image2Path,\n      image_1_base64: image1Base64,\n      image_2_base64: image2Base64,\n      image_1_mime: mime1,\n      image_2_mime: mime2,\n      image_count: imageCount,\n      product_image_count: imageCount,\n      request_body: {\n        system_instruction: { parts: [{ text: sb.system_instruction }] },\n        contents: [{ role: 'user', parts }],\n        generationConfig: sb.generation_config,\n      },\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        540
+      ],
+      "id": "ea4966fe-5eb4-4af7-a4e8-6884ff88a50b",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json._api_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json._auth_header }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json._adapted_body }}",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1180,
+        540
+      ],
+      "id": "23c4b673-3348-43ad-8448-c0a94ce59719",
+      "name": "分镜图提示词生成",
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 15000,
+      "notes": "gemini_text_helper_proxy_v1: 文本 Gemini 调用走本地 helper/代理，避免地区限制和直接 HTTP 400。\ngemini_text_helper_proxy_v1: 文本 Gemini 调用走本地 helper/代理，避免地区限制和直接 HTTP 400。"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        660,
+        840
+      ],
+      "id": "39bfe55f-6b3c-4962-b2e3-577a22d88a5e",
+      "name": "Merge3_6grid1"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json || {};\n\nfunction pickImagePaths(input) {\n  if (Array.isArray(input.product_image_local_paths) && input.product_image_local_paths.length > 0) {\n    return input.product_image_local_paths.filter(Boolean);\n  }\n  if (Array.isArray(input.默认测试图片路径) && input.默认测试图片路径.length > 0) {\n    return input.默认测试图片路径.filter(Boolean);\n  }\n  if (Array.isArray(input.product_images_meta)) {\n    return input.product_images_meta\n      .map((entry) => (typeof entry === 'string' ? entry : entry?.path || ''))\n      .filter(Boolean);\n  }\n  return [];\n}\n\nconst imagePaths = pickImagePaths(row);\nconst metaImages = Array.isArray(row.product_images_meta) ? row.product_images_meta : [];\nconst explicitImageCount = Number(row.product_image_count ?? row.image_count ?? 0);\nconst imageCount = Math.max(explicitImageCount, imagePaths.length, metaImages.length);\n\nreturn [\n  {\n    json: {\n      ...row,\n      project_id: row.project_id || '',\n      product_name: row.product_name || '',\n      target_market: row.target_market || '',\n      target_language: row.target_language || '',\n      creative_task_type: row.creative_task_type || '',\n      reference_case_url: row.reference_case_url || '',\n      product_image_local_paths: imagePaths,\n      product_image_count: imageCount,\n      image_count: imageCount,\n      image_1_path: row.image_1_path || imagePaths[0] || '',\n      image_2_path: row.image_2_path || imagePaths[1] || '',\n      使用默认测试图片: !!row.使用默认测试图片,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        920
+      ],
+      "id": "07b69aa0-4f88-4bfe-a4f8-9b0ce243f111",
+      "name": "Nano前_轻量上下文"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst row = $input.first().json || {};\nconst imagePaths = Array.isArray(row.product_image_local_paths) ? row.product_image_local_paths.filter(Boolean) : [];\nconst metaImages = Array.isArray(row.product_images_meta) ? row.product_images_meta : [];\nconst image1Path = row.image_1_path || imagePaths[0] || metaImages[0]?.path || '';\nconst image2Path = row.image_2_path || imagePaths[1] || metaImages[1]?.path || '';\nconst explicitImageCount = Number(row.product_image_count ?? row.image_count ?? 0);\nconst imageCount = Math.max(explicitImageCount, imagePaths.length, metaImages.length);\n\nfunction readImageAsInlineData(filePath) {\n  if (!filePath || !fs.existsSync(filePath)) {\n    return null;\n  }\n  const ext = path.extname(filePath).toLowerCase();\n  const mimeType =\n    ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : 'application/octet-stream';\n  return { path: filePath, mimeType, data: fs.readFileSync(filePath).toString('base64') };\n}\n\nconst image1 = imageCount >= 1 ? readImageAsInlineData(image1Path) : null;\nconst image2 = imageCount >= 2 ? readImageAsInlineData(image2Path) : null;\n\nreturn [\n  {\n    json: {\n      ...row,\n      product_image_count: imageCount,\n      image_count: imageCount,\n      image_1_path: image1?.path || image1Path || '',\n      image_2_path: image2?.path || image2Path || '',\n      image_1_mime: image1?.mimeType || row.image_1_mime || metaImages[0]?.mimeType || '',\n      image_2_mime: image2?.mimeType || row.image_2_mime || metaImages[1]?.mimeType || '',\n      image_1_base64: image1?.data || row.image_1_base64 || '',\n      image_2_base64: image2?.data || row.image_2_base64 || '',\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        840
+      ],
+      "id": "18c7abb1-5f99-4cff-b509-ac1df354f222",
+      "name": "本地图片转Gemini输入"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const data = {\n  ...( $('Code in JavaScript2').first()?.json || {} ),\n  ...( $('本地图片转Gemini输入').first()?.json || {} ),\n  ...$json,\n};\n\nconst projectId = data.project_id || data.storyboard_overview?.project_id || '';\nconst promptCore = data.nanobanana_storyboard_prompt || '';\nconst expectedTotalPanels = Number(data.expected_total_panels || data.storyboard_overview?.total_panels || 0);\n\nfunction tpl(str, vars) {\n  let out = str;\n  for (const [k, v] of Object.entries(vars)) {\n    out = out.split('{{' + k + '}}').join(v == null ? '' : String(v));\n  }\n  return out;\n}\n\nconst promptsLib = $('Prompt Library').first().json;\nconst wrapperTpl = promptsLib.nanobanana_image?.english_storyboard_wrapper || 'Storyboard instructions:\\n{{nanobanana_storyboard_prompt}}\\n';\nconst reviewRound = Number(data.review_round || 1);\nconst reviewFeedback = String(data.review_feedback || '').trim();\nconst badShotIds = Array.isArray(data.bad_shot_ids_list)\n  ? data.bad_shot_ids_list.map((x) => String(x).trim()).filter(Boolean)\n  : String(data.bad_shot_ids || '').split(/[\\n,，\\s]+/).map((x) => x.trim()).filter(Boolean);\n\nconst reviewCorrectionBlock = reviewFeedback || badShotIds.length\n  ? '\\n\\nHuman reviewer correction request (round ' + reviewRound + '):\\n' +\n    (badShotIds.length ? '- Regenerate and improve these panels first: ' + badShotIds.join(', ') + '\\n' : '') +\n    (reviewFeedback ? '- Reviewer feedback: ' + reviewFeedback + '\\n' : '') +\n    '- Keep all other approved panels as stable and consistent as possible.\\n' +\n    '- Maintain the same woman, styling, product identity, room, and overall continuity.\\n'\n  : '';\n\nconst finalPrompt = tpl(wrapperTpl, { nanobanana_storyboard_prompt: promptCore }).trim() + reviewCorrectionBlock +\n  (expectedTotalPanels\n    ? '\\n\\nAbsolute execution rule:\\n- The final storyboard must contain exactly ' + expectedTotalPanels + ' panels.\\n- Do not add extra panels.\\n- Do not remove panels.\\n- Panel count must exactly equal the provided shot count.\\n'\n    : '');\n\nconst imageCount = Number(data.product_image_count ?? data.image_count ?? 0);\nconst image1 = data.image_1_base64 || '';\nconst image2 = data.image_2_base64 || '';\nconst imgConf = promptsLib.nanobanana_image?.gemini_image_config || { aspectRatio: '4:5', imageSize: '4K' };\nconst parts = [{ text: finalPrompt }];\nif (imageCount >= 1 && image1) parts.push({ inlineData: { mimeType: data.image_1_mime || 'image/jpeg', data: image1 } });\nif (imageCount >= 2 && image2) parts.push({ inlineData: { mimeType: data.image_2_mime || 'image/jpeg', data: image2 } });\n\nconst geminiRequestBody = {\n  contents: [{ role: 'user', parts }],\n  generationConfig: {\n    responseModalities: ['IMAGE'],\n    thinkingConfig: { thinkingLevel: 'HIGH' },\n    imageConfig: { aspectRatio: imgConf.aspectRatio, imageSize: imgConf.imageSize },\n  },\n};\n\nreturn {\n  project_id: projectId,\n  output_type: 'storyboard_grid',\n  nanobanana_prompt_core: promptCore,\n  final_nanobanana_prompt: finalPrompt,\n  expected_total_panels: expectedTotalPanels,\n  review_round: reviewRound,\n  review_feedback: reviewFeedback,\n  bad_shot_ids: badShotIds.join(','),\n  bad_shot_ids_list: badShotIds,\n  regeneration_requested: !!(reviewFeedback || badShotIds.length),\n  image_1_path: data.image_1_path || '',\n  image_2_path: data.image_2_path || '',\n  image_count: imageCount,\n  product_image_count: imageCount,\n  has_image_1: !!image1,\n  has_image_2: !!image2,\n  gemini_request_body_json: JSON.stringify(geminiRequestBody),\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        840
+      ],
+      "id": "d04e63e8-4f58-4695-934a-8e11613085d1",
+      "name": "组装NanoBanana执行字段"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst os = require('os');\nconst process = require('process');\nconst http = require('http');\nconst https = require('https');\n\nconst PROJECT_ROOT = process.env.TIKTOK_WORKFLOW_ROOT || process.env.PROJECT_ROOT || process.cwd();\nconst DATA_ROOT = require('process').env.WORKFLOW_DATA_ROOT || require('path').join(require('os').homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data') || require('process').env.AI_VIDEO_RUNTIME_ROOT || PROJECT_ROOT;\nasync function requestJson(url, options = {}) {\n  const { method = 'GET', headers = {}, body } = options;\n  const mod = /^https:/i.test(url) ? https : http;\n  return new Promise((resolve, reject) => {\n    const req = mod.request(url, { method, headers }, (res) => {\n      const chunks = [];\n      res.on('data', c => chunks.push(c));\n      res.on('end', () => {\n        const raw = Buffer.concat(chunks).toString('utf8');\n        if (res.statusCode >= 400) {\n          reject(new Error('HTTP ' + res.statusCode + ': ' + raw.slice(0, 300)));\n          return;\n        }\n        try { resolve(JSON.parse(raw)); }\n        catch(e) { reject(new Error('JSON parse failed: ' + e.message)); }\n      });\n    });\n    req.on('error', reject);\n    if (body) req.write(body);\n    req.end();\n  });\n}\n\nasync function requestRaw(url, options = {}) {\n  const { method = 'GET', headers = {}, body } = options;\n  const mod = /^https:/i.test(url) ? https : http;\n  return new Promise((resolve, reject) => {\n    const req = mod.request(url, { method, headers }, (res) => {\n      const chunks = [];\n      res.on('data', c => chunks.push(c));\n      res.on('end', () => {\n        resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) });\n      });\n    });\n    req.on('error', reject);\n    if (body) req.write(body);\n    req.end();\n  });\n}\n\n\nfunction readImageConfig() {\n  const candidates = [\n    process.env.AI_VIDEO_CONFIG_PATH,\n    path.join(os.homedir(), 'Library', 'Application Support', 'AI Video', 'config', 'local-config.json'),\n    process.env.TIKTOK_WORKFLOW_ROOT ? path.join(process.env.TIKTOK_WORKFLOW_ROOT, '版本测试', 'config', 'local-config.json') : null,\n    process.env.TIKTOK_WORKFLOW_ROOT ? path.join(process.env.TIKTOK_WORKFLOW_ROOT, 'config', 'local-config.json') : null,\n    path.join(PROJECT_ROOT, '版本测试', 'config', 'local-config.json'),\n    path.join(PROJECT_ROOT, 'config', 'local-config.json'),\n  ].filter(Boolean);\n\n  let cfg = {};\n  for (const p of candidates) {\n    try {\n      const next = JSON.parse(fs.readFileSync(p, 'utf8'));\n      if (next && Object.keys(next).length) { cfg = next; break; }\n    } catch(e) {}\n  }\n\n  const adapter = (cfg.adapters || {}).image || (cfg.tasks && cfg.tasks.storyboard_image && cfg.tasks.storyboard_image.route) || 'kie_market_image';\n  if (adapter !== 'kie_market_image') {\n    throw new Error(`当前版本仅支持 Kie 生图（adapter.image=${adapter}）。请在「系统配置」确认图片适配器为 kie_market_image 并填写 Kie API Key。`);\n  }\n  const kie = cfg.kie || {};\n  const providerKie = (cfg.providers || {}).kie || {};\n  const task = (cfg.tasks || {}).storyboard_image || {};\n  const api = (cfg.apis || {}).storyboard_image || {};\n  const kieKey = String(providerKie.api_key || kie.api_key || api.api_key || process.env.KIE_API_KEY || '').trim();\n  const kieModel = String(task.model || kie.image_model || api.model || 'nano-banana-pro').trim();\n  const kieBase = String(providerKie.base_url || kie.base_url || api.base_url || 'https://api.kie.ai/api').trim().replace(/\\/+$/, '');\n  return { kieKey, kieModel, kieBase };\n}\n\nconst imgCfg = readImageConfig();\nif (!imgCfg.kieKey) throw new Error('缺少 Kie API Key。请在「系统配置」→ Kie API Key 填写。');\n\nconst input = $json || {};\nconst requestBodyJson = String(input.gemini_request_body_json || '').trim();\nif (!requestBodyJson) throw new Error('nano banana：缺少 gemini_request_body_json');\n\nconst projectId = String(input.project_id || 'proj').replace(/[^a-zA-Z0-9_-]+/g, '_');\nconst requestHash = 'nano_' + projectId + '_' + Date.now() + '_' + Math.random().toString(16).slice(2, 10);\nconst requestDir = path.join(DATA_ROOT, '.n8n-local-cache', 'gemini-requests');\nconst responseDir = path.join(DATA_ROOT, '.n8n-local-cache', 'gemini-responses');\nfs.mkdirSync(requestDir, { recursive: true });\nfs.mkdirSync(responseDir, { recursive: true });\nconst requestPath = path.join(requestDir, requestHash + '.json');\nconst responsePath = path.join(responseDir, 'nanobanana_' + requestHash + '.json');\nfs.writeFileSync(requestPath, requestBodyJson);\n\nconst headers = { 'Authorization': 'Bearer ' + imgCfg.kieKey, 'Content-Type': 'application/json' };\n\nlet gemBody = {};\ntry { gemBody = JSON.parse(requestBodyJson); } catch(e) { throw new Error('无法解析 request body: ' + e.message); }\nconst imgAspectRatio = (gemBody && gemBody.generationConfig && gemBody.generationConfig.imageConfig && gemBody.generationConfig.imageConfig.aspectRatio) || '4:5';\nconst imgResolution = (gemBody && gemBody.generationConfig && gemBody.generationConfig.imageConfig && gemBody.generationConfig.imageConfig.imageSize) || '2K';\n\nconst parts = (gemBody.contents || []).flatMap(c => c.parts || []);\nconst textPrompt = parts.filter(p => p.text).map(p => p.text).join('\\n');\n// Normalize both camelCase (inlineData) and snake_case (inline_data) from upstream\nconst imageParts = parts\n  .filter(p => p.inline_data || p.inlineData)\n  .map(p => {\n    const d = p.inline_data || p.inlineData;\n    return { inline_data: { data: d.data, mime_type: d.mime_type || d.mimeType || 'image/jpeg' } };\n  });\n\nconst uploadBase = 'https://kieai.redpandaai.co';\nconst imageInputs = [];\nfor (const imgPart of imageParts) {\n  // Guard: reject empty base64 before hitting Kie to save quota\n  const _b64 = imgPart.inline_data.data || '';\n  if (!_b64.trim()) throw new Error('参考图 base64 为空，无法上传（image index ' + imageInputs.length + '，project_id=' + projectId + '）。请检查产品图片是否成功读取。');\n  const _mime = imgPart.inline_data.mime_type || 'image/jpeg';\n  const _ext = _mime.includes('png') ? '.png' : _mime.includes('webp') ? '.webp' : '.jpg';\n  const _idx = imageInputs.length + 1;\n  const uploadData = await requestJson(uploadBase + '/api/file-base64-upload', {\n    method: 'POST',\n    headers,\n    body: JSON.stringify({\n      base64Data: _b64,\n      uploadPath: 'ai-video/storyboard-inputs/' + projectId,\n      fileName: 'ref_' + _idx + '_' + requestHash + _ext,\n      type: _mime,\n      mimeType: _mime,\n    }),\n    label: '图片上传 ' + _idx\n  });\n  const imgUrl = uploadData.data?.downloadUrl || uploadData.data?.url || uploadData.downloadUrl || uploadData.url || '';\n  if (!imgUrl) {\n    const _fp = uploadData.data?.filePath || '';\n    if (_fp) throw new Error('图片上传返回 filePath 而非可下载 URL，无法继续（filePath=' + _fp + '）。响应=' + JSON.stringify(uploadData).slice(0, 500));\n    throw new Error('图片上传未返回可用 URL。响应=' + JSON.stringify(uploadData).slice(0, 500));\n  }\n  if (!/^https?:\\/\\//i.test(imgUrl)) throw new Error('图片上传返回的 URL 无效：' + imgUrl);\n  imageInputs.push(imgUrl);\n}\n\nlet createBody;\n// INTERNAL RESERVED: nano-banana-pro requires per-shot pipeline, not available in v1\nif (imgCfg.kieModel === 'nano-banana-pro-image-to-image') {\n  throw new Error('nano-banana-pro 路径在当前版本已禁用，需要逐镜生成适配。请确认配置 tasks.storyboard_image.model = nano-banana-pro。');\n} else {\n  createBody = {\n    model: imgCfg.kieModel,\n    input: {\n      prompt: textPrompt,\n      aspect_ratio: imgAspectRatio,\n      resolution: imgResolution,\n      output_format: 'png',\n      image_input: imageInputs,\n    }\n  };\n}\nconst createData = await requestJson(imgCfg.kieBase + '/v1/jobs/createTask', {\n  method: 'POST',\n  headers,\n  body: JSON.stringify(createBody),\n  label: 'createTask'\n});\nconst taskId = createData.data?.taskId || createData.taskId;\nif (!taskId) throw new Error('createTask 未返回 taskId: ' + JSON.stringify(createData).slice(0, 800));\n\nconst pollUrl = imgCfg.kieBase + '/v1/jobs/recordInfo?taskId=' + encodeURIComponent(taskId);\nlet resultUrls = [];\nfor (let attempt = 1; attempt <= 120; attempt++) {\n  await new Promise(r => setTimeout(r, 5000));\n  let pollData = null;\n  try {\n    pollData = await requestJson(pollUrl, { headers, label: 'recordInfo' });\n  } catch (e) {\n    if (attempt === 120) throw e;\n    continue;\n  }\n  const state = pollData.data?.state || pollData.data?.status || pollData.status || '';\n  if (state === 'success' || state === 'completed') {\n    const rj = pollData.data?.resultJson || pollData.data?.result_json || pollData.resultJson;\n    const parsed = typeof rj === 'string' ? JSON.parse(rj) : (rj || {});\n    resultUrls = parsed.resultUrls || parsed.result_urls || parsed.urls || [];\n    break;\n  }\n  if (state === 'failed' || state === 'error') throw new Error('Kie 图片任务失败 taskId=' + taskId + ': ' + JSON.stringify(pollData.data || pollData).slice(0, 1200));\n}\nif (!resultUrls.length) throw new Error('Kie 图片任务超时 taskId=' + taskId);\n\nconst imgRes = await requestRaw(resultUrls[0], { label: '下载结果图片' });\nif (imgRes.status < 200 || imgRes.status >= 300) throw new Error('下载结果图片失败 ' + imgRes.status + ': ' + imgRes.body.toString('utf8').slice(0, 500));\nconst imgBase64 = imgRes.body.toString('base64');\nconst mimeType = String(imgRes.headers['content-type'] || 'image/jpeg').split(';')[0];\n\nconst result = {\n  candidates: [{ content: { parts: [{ inline_data: { data: imgBase64, mime_type: mimeType } }] } }],\n  nanobanana_request_hash: requestHash,\n  gemini_request_file_path: requestPath,\n  nanobanana_response_file_path: responsePath,\n  nanobanana_resume_source: 'kie_market_image',\n  _kie_task_id: taskId,\n  _kie_result_urls: resultUrls\n};\nfs.writeFileSync(responsePath, JSON.stringify({ ...result, candidates: '[image base64 omitted]' }, null, 2));\nreturn { json: { ...input, ...result } };"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        840
+      ],
+      "id": "392fba9c-606b-4810-a6be-f485e87fbdf3",
+      "name": "nano banana"
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = $json;\n\nfunction looksLikeBase64(value) {\n  return typeof value === 'string' && value.length > 100 && /^[A-Za-z0-9+/=\\r\\n]+$/.test(value);\n}\n\nfunction findImageData(value, seen = new Set()) {\n  if (value == null) return null;\n  if (typeof value !== 'object') return null;\n  if (seen.has(value)) return null;\n  seen.add(value);\n\n  if (value.inlineData?.data) {\n    return {\n      mimeType: value.inlineData.mimeType || 'image/jpeg',\n      data: value.inlineData.data,\n      source: 'inlineData',\n    };\n  }\n\n  if (value.inline_data?.data) {\n    return {\n      mimeType: value.inline_data.mime_type || value.inline_data.mimeType || 'image/jpeg',\n      data: value.inline_data.data,\n      source: 'inline_data',\n    };\n  }\n\n  if (looksLikeBase64(value.data) && (value.mimeType || value.mime_type)) {\n    return {\n      mimeType: value.mimeType || value.mime_type || 'image/jpeg',\n      data: value.data,\n      source: 'direct-data',\n    };\n  }\n\n  if (Array.isArray(value)) {\n    for (const entry of value) {\n      const found = findImageData(entry, seen);\n      if (found) return found;\n    }\n    return null;\n  }\n\n  const preferredKeys = ['body', 'data', 'candidates', 'content', 'parts', 'response'];\n  for (const key of preferredKeys) {\n    if (key in value) {\n      const found = findImageData(value[key], seen);\n      if (found) return found;\n    }\n  }\n\n  for (const entry of Object.values(value)) {\n    const found = findImageData(entry, seen);\n    if (found) return found;\n  }\n  return null;\n}\n\nconst image = findImageData(payload);\n\nif (!image?.data) {\n  throw new Error(\n    '没有在返回结果里找到图片数据。响应摘要：' +\n      JSON.stringify(payload).slice(0, 1200),\n  );\n}\n\nconst mimeType = image.mimeType || 'image/jpeg';\nconst base64Data = String(image.data || '').replace(/\\s+/g, '');\n\nreturn {\n  project_id:\n    payload.project_id ||\n    $('本地图片转Gemini输入').first()?.json?.project_id ||\n    $('读取脚本上下文').first()?.json?.project_id ||\n    '',\n  image_mime_type: mimeType,\n  image_base64: base64Data,\n  file_extension: mimeType.includes('png') ? 'png' : mimeType.includes('webp') ? 'webp' : 'jpg',\n  has_image: !!base64Data,\n  image_source_path: image.source || '',\n};"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        840
+      ],
+      "id": "5d28ff62-ccb2-4ade-9051-85e613032688",
+      "name": "提取NanoBanana返回图片"
+    },
+    {
+      "parameters": {
+        "jsCode": "const process = require('process');\nconst fs = require('fs');\nconst path = require('path');\n\nconst row = $input.first().json || {};\nconst PROJECT_ROOT = process.env.TIKTOK_WORKFLOW_ROOT || process.env.PROJECT_ROOT || process.cwd();\nconst DATA_ROOT = require('process').env.WORKFLOW_DATA_ROOT || require('path').join(require('os').homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data') || require('process').env.AI_VIDEO_RUNTIME_ROOT || PROJECT_ROOT;\nconst cacheDir = require('path').join(DATA_ROOT, '.n8n-local-cache', 'nanobanana');\nfs.mkdirSync(cacheDir, { recursive: true });\n\nconst projectId =\n  row.project_id ||\n  $('本地图片转Gemini输入').first()?.json?.project_id ||\n  $('读取脚本上下文').first()?.json?.project_id ||\n  'proj';\n\nconst mimeType = row.image_mime_type || 'image/jpeg';\nconst extension = row.file_extension || (mimeType.includes('png') ? 'png' : 'jpg');\nconst base64Data = row.image_base64 || '';\n\nif (!base64Data) {\n  throw new Error('NanoBanana 结果落盘失败：未找到 image_base64');\n}\n\nconst fileName = 'storyboard_' + projectId + '_' + Date.now() + '.' + extension;\nconst absolutePath = path.join(cacheDir, fileName);\nfs.writeFileSync(absolutePath, Buffer.from(base64Data, 'base64'));\n\nreturn [\n  {\n    json: {\n      project_id: projectId,\n      storyboard_image_path: absolutePath,\n      storyboard_image_mime_type: mimeType,\n      storyboard_file_extension: extension,\n      storyboard_file_name: fileName,\n      storyboard_cached_at: new Date().toISOString(),\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        840
+      ],
+      "id": "29d8bcc2-60aa-4d00-c61a-bd2eg465g333",
+      "name": "NanoBanana结果落盘"
+    },
+    {
+      "parameters": {
+        "jsCode": "const process = require('process');\nconst fs = require('fs');\nconst path = require('path');\n\nlet sharp;\ntry {\n  sharp = require('sharp');\n} catch (e) {\n  throw new Error(\n    '六宫格裁切需要 sharp：在 n8n 安装目录执行 npm install sharp。详情：' + (e && e.message),\n  );\n}\n\nconst scriptRow = $('读取脚本上下文').first().json;\nconst shots = Array.isArray(scriptRow.shots) ? scriptRow.shots : [];\nconst item = $input.first();\nconst json = item.json || {};\nconst binKeys = Object.keys(item.binary || {});\nlet inputBuf;\nif (binKeys.length > 0) {\n  const binKey = binKeys[0];\n  inputBuf = await this.helpers.getBinaryDataBuffer(0, binKey);\n} else if (json.storyboard_image_path) {\n  if (!fs.existsSync(json.storyboard_image_path)) {\n    throw new Error('六宫格裁切: 本地故事板图片不存在：' + json.storyboard_image_path);\n  }\n  inputBuf = fs.readFileSync(json.storyboard_image_path);\n} else {\n  throw new Error('六宫格裁切: 未找到 binary 或 storyboard_image_path');\n}\n\nconst prompts = $('Prompt Library').first().json;\nconst grid = prompts.storyboard_grid || {};\nconst cols = Number(grid.cols || 3);\nconst inset = Number(grid.crop_inset_ratio ?? 0.02);\nconst outputMimeType = grid.output_mime_type || 'image/jpeg';\nconst outputExtension = grid.output_extension || 'jpg';\nconst jpegQuality = Number(grid.jpeg_quality ?? 72);\nconst panelOutputWidth = Number(grid.panel_output_width || 1080);\nconst panelOutputHeight = Number(grid.panel_output_height || 1920);\nconst panelPreviewWidth = Number(grid.panel_preview_width || 240);\nconst panelPreviewHeight = Number(grid.panel_preview_height || 427);\nconst panelCacheDir = require('path').join(require('process').env.WORKFLOW_DATA_ROOT || require('path').join(require('os').homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data'), '.n8n-local-cache', '分镜图裁剪');\nconst _pr = process.env.TIKTOK_WORKFLOW_ROOT || process.env.PROJECT_ROOT || process.cwd();\nlet reviewAssetBaseUrl = '';\ntry { const _c = JSON.parse(require('fs').readFileSync(require('path').join(_pr, '版本测试', 'config', 'local-config.json'), 'utf8')); reviewAssetBaseUrl = (_c.services && _c.services.workspace_host) || reviewAssetBaseUrl; } catch(_e) {}\nfs.mkdirSync(panelCacheDir, { recursive: true });\nconst panelFullDir = path.join(panelCacheDir, 'full');\nconst panelPreviewDir = path.join(panelCacheDir, 'previews');\nfs.mkdirSync(panelFullDir, { recursive: true });\nfs.mkdirSync(panelPreviewDir, { recursive: true });\nconst layoutForPanels = { panels: 6, cols: 3, rows: 2, aspectLabel: '27:32', targetRatio: 27 / 32 };\nif (shots.length !== 6) {\n  throw new Error('当前工作流已强制为六宫格输出，前置 shots 必须严格等于 6，实际为 ' + shots.length);\n}\n\nconst meta = await sharp(inputBuf).metadata();\nconst W = meta.width || 0;\nconst H = meta.height || 0;\nif (!W || !H) {\n  throw new Error('无法读取图片尺寸');\n}\nconst actualRatio = W / H;\n// nano-banana-pro outputs seamless 3x2 storyboards without bright separator lines;\n// uniform 3x2 crop is used — aspect ratio validation below is the only guard\nconst ratioDelta = Math.abs(actualRatio - layoutForPanels.targetRatio);\nif (ratioDelta > 0.08) {\n  const _ratioHint = actualRatio > 0.95\n    ? '（接近1:1，Kie API 未传入 aspect_ratio 导致方图）'\n    : actualRatio < 0.6\n      ? '（图片过高/纵向异常）'\n      : '（比例偏差）';\n  throw new Error(\n    `分镜图比例偏差过大${_ratioHint}（实际=${actualRatio.toFixed(4)} vs 期望 ${layoutForPanels.aspectLabel}=` +\n    `${layoutForPanels.targetRatio.toFixed(4)}，允许偏差±0.08）。` +\n    `图片尺寸 ${W}×${H}。` +\n    (actualRatio > 0.95 ? '请确认 nano banana 节点已正确传入 aspect_ratio=\"4:5\" 到 Kie createTask。' : '已拦截，避免错误裁切。')\n  );\n}\nconst shotsForPanels = shots;\n\nlet cropW = W;\nlet cropH = H;\nlet left = 0;\nlet top = 0;\nconst targetRatio = layoutForPanels.targetRatio;\nconst currentRatio = W / H;\nif (currentRatio > targetRatio) {\n  cropW = Math.round(H * targetRatio);\n  left = Math.round((W - cropW) / 2);\n} else {\n  cropH = Math.round(W / targetRatio);\n  top = Math.round((H - cropH) / 2);\n}\n\nconst canvas = await sharp(inputBuf)\n  .extract({ left, top, width: cropW, height: cropH })\n  .toBuffer();\n\nconst cMeta = await sharp(canvas).metadata();\nconst cW = cMeta.width || cropW;\nconst cH = cMeta.height || cropH;\nconst cellW = Math.floor(cW / layoutForPanels.cols);\nconst cellH = Math.floor(cH / layoutForPanels.rows);\n\nfunction parseDurationEnd(s) {\n  if (!s || typeof s !== 'string') {\n    return null;\n  }\n  const m = s.match(/(\\d+)\\s*-\\s*(\\d+)\\s*s?/i);\n  if (!m) {\n    return null;\n  }\n  return { start: Number(m[1]), end: Number(m[2]) };\n}\n\nconst out = [];\nlet panelIndex = 0;\nfor (let row = 0; row < layoutForPanels.rows; row++) {\n  for (let col = 0; col < layoutForPanels.cols; col++) {\n    const ix0 = col * cellW;\n    const iy0 = row * cellH;\n    const x = ix0 + Math.round(cellW * inset);\n    const y = iy0 + Math.round(cellH * inset);\n    const w = Math.max(1, Math.floor(cellW * (1 - 2 * inset)));\n    const h = Math.max(1, Math.floor(cellH * (1 - 2 * inset)));\n\n    let tileBuilder = sharp(canvas)\n      .extract({ left: x, top: y, width: w, height: h })\n      .resize(panelOutputWidth, panelOutputHeight, {\n        fit: 'cover',\n        position: 'center',\n        kernel: sharp.kernel.lanczos3,\n      })\n      .sharpen();\n    if (outputMimeType === 'image/png') {\n      tileBuilder = tileBuilder.png();\n    } else if (outputMimeType === 'image/webp') {\n      tileBuilder = tileBuilder.webp({ quality: jpegQuality });\n    } else {\n      tileBuilder = tileBuilder.jpeg({ quality: jpegQuality, mozjpeg: true });\n    }\n    const tileBuf = await tileBuilder.toBuffer();\n    const previewBuf = await sharp(tileBuf)\n      .resize(panelPreviewWidth, panelPreviewHeight, {\n        fit: 'cover',\n        position: 'center',\n        kernel: sharp.kernel.lanczos3,\n      })\n      .jpeg({ quality: 68, mozjpeg: true })\n      .toBuffer();\n\n    const shot = shotsForPanels[panelIndex] || {};\n    const pe = parseDurationEnd(shot.duration || '');\n    const targetMarket = String(shot.target_market || scriptRow.target_market || json.target_market || '').trim();\n    const targetLanguage = String(shot.target_language || scriptRow.target_language || json.target_language || '').trim();\n    const localVoiceover = String(shot.optional_voiceover_local || '').trim();\n    const mainAction = String(shot.visual_action || shot.scene_setting || '').trim();\n    const cameraMovement = String(shot.camera_movement || 'subtle natural handheld smartphone movement').trim();\n    const productFocus = String(shot.product_state || scriptRow.core_visual_focus || 'keep the product clearly visible as the visual center').trim();\n    const continuity = String(shot.continuity_requirements || 'maintain the exact first-frame identity, product, outfit, room, lighting, and shot-to-shot continuity').trim();\n    const voiceRules = prompts.voice_localization || {};\n    const MARKET_KEY_ALIASES = {'越南':'VN','马来西亚':'MY','印度尼西亚':'ID','泰国':'TH','中国':'CN','日本':'JP','韩国':'KR','美国':'US','英国':'UK','澳大利亚':'AU'};\n    const marketKey = MARKET_KEY_ALIASES[targetMarket] || targetMarket.toUpperCase();\n    const localVoiceRule = voiceRules[marketKey] || voiceRules[targetMarket] || voiceRules.default || {};\n    const localCreatorTone = String(localVoiceRule.tone || 'natural, conversational, authentic local TikTok UGC creator tone').trim();\n    const hardAvoid = Array.from(new Set([\n      'no robotic AI narration',\n      'no ad-like voice',\n      'no machine-translation tone',\n      'no subtitles',\n      'no watermarks',\n      'no random text',\n      'no random on-screen text',\n      'no captions',\n      'no logo overlays',\n      'no stickers',\n      'no extra fingers',\n      'no distorted hands',\n      'no product morphing',\n      'no face morphing',\n      'no sudden scene cuts',\n      ...((prompts.veo_quality_constraints || {}).hard_prohibitions || []),\n      ...((localVoiceRule || {}).avoid || []),\n      ...((localVoiceRule || {}).veo_constraints || []),\n    ].map((v) => String(v || '').trim()).filter(Boolean)));\n\n    const videoPromptOriginal = [\n      'Scene: ' + (shot.scene_setting || ''),\n      'Action: ' + (shot.visual_action || ''),\n      'Camera: ' + (shot.camera_movement || ''),\n      'Product state: ' + (shot.product_state || ''),\n      'Expression: ' + (shot.expression_focus || ''),\n      'Voiceover (local, confirmed_script_context priority): ' + localVoiceover,\n      'Continuity: ' + (shot.continuity_requirements || ''),\n    ].join(' ');\n\n    const isDramaType = ['故事剧情带货', '真实故事剧情', '爆点故事剧情'].includes(scriptRow.creative_task_type || '');\n    // P2B-fix: read execution_layer from prompt_center for runtime-visible injection\n    const _execLayer = (prompts.veo_quality_constraints || {}).execution_layer || {};\n    const _execProdFn = String(_execLayer.product_function_low_risk || '').trim();\n    const _execScriptObey = String(_execLayer.script_obedience || '').trim();\n    const videoPrompt = [\n      'Use the provided storyboard panel image as the exact first frame for this image-to-video clip. Do not remove or replace the image input.',\n      'Authoritative source: confirmed_script_context / current shots data. Respect target_market and target_language exactly.',\n      'Do not create a new story or new selling angle. Execute only this shot task from the confirmed script and the provided first frame; do not add unrelated scenes, props, products, characters, subtitles, or plot beats.',\n      'Eight-second ad task pacing: within the first 1-2 seconds, start the current shot key visual action or selling-point proof; finish one clear TikTok ad-testing task in this clip; no slow cinematic buildup, no empty posing, no lingering filler.',\n      'Target market: ' + (targetMarket || 'not specified') + '. Target language: ' + (targetLanguage || 'not specified') + '.',\n      'Create a realistic TikTok UGC-style ecommerce product video clip, vertical 9:16, natural handheld smartphone footage, natural light, real-life environment.',\n      'Motion strategy: low-risk natural movement with useful information density. Animate small believable movement from the first frame — subtle head turn, slight lean, simple product reveal, short demonstration, or proof gesture. No complex finger operation, no fast gestures, no fabric warping, no large limb movements, no stiff empty posing.',\n      _execProdFn ? 'Product function execution rule: ' + _execProdFn : '',\n      _execScriptObey ? 'Script execution rule: ' + _execScriptObey : '',\n      'Main action: ' + mainAction + '.',\n      'Camera movement: ' + cameraMovement + '.',\n      'Product focus: ' + productFocus + '.',\n      'Product lock: preserve the exact product silhouette, color, material, key components, proportions, visible marks, and use state from the first frame and product references; no redesign, no morphing, no color/material/function changes.',\n      'Continuity: ' + continuity + '.',\n      'Local creator tone: ' + localCreatorTone + '.',\n      'Voice continuity: if voiceover is implied, keep the same speaker, same voice tone, same rhythm, and same local accent style across shots; use short dense local phrasing, not long explanations.',\n      'Local voiceover reference only, do not render on-screen text: ' + localVoiceover,\n      'Avoid: ' + hardAvoid.join(', ') + '.',\n      isDramaType ? 'Drama type: one simple action per shot only. Convey emotion through facial expression and subtle posture shift — not through running, falling, crying, or rapid hand gestures. Keep fabric and clothing stable.' : '',\n      (shot.stage === 'Hook' ? 'Shot type — Hook: emphasize the opening tension or pain point visible in the first frame; draw viewer attention in the first 2 seconds; do not introduce the product yet if product_state says so.' : shot.stage === 'Educate' ? 'Shot type — Educate: keep product and action clearly visible and unambiguous; single focused demonstration; product identity must be stable and consistent with previous shots.' : shot.stage === 'Convert' ? 'Shot type — Convert: warm positive resolution; product prominently and cleanly displayed; creator tone approachable and trustworthy; natural CTA energy.' : ''),\n      'Stage: ' + (shot.stage || ''),\n      'Shot order: ' + (panelIndex + 1) + ' of ' + layoutForPanels.panels + '.',\n    ].filter(Boolean).join(' ');\n\n    const fileName =\n      'panel_' +\n      (scriptRow.project_id || json.project_id || 'proj') +\n      '_' +\n      (shot.shot_id || 'shot_' + (panelIndex + 1)) +\n      '_9x16.' +\n      outputExtension;\n\n    const fullFileName =\n      'panel_full_' +\n      (scriptRow.project_id || json.project_id || 'proj') +\n      '_' +\n      (shot.shot_id || 'shot_' + (panelIndex + 1)) +\n      '_' +\n      Date.now() +\n      '.' +\n      outputExtension;\n    const fullPath = path.join(panelFullDir, fullFileName);\n    fs.writeFileSync(fullPath, tileBuf);\n\n    const previewFileName =\n      'panel_preview_' +\n      (scriptRow.project_id || json.project_id || 'proj') +\n      '_' +\n      (shot.shot_id || 'shot_' + (panelIndex + 1)) +\n      '_' +\n      Date.now() +\n      '.jpg';\n    const previewPath = path.join(panelPreviewDir, previewFileName);\n    fs.writeFileSync(previewPath, previewBuf);\n    const previewUrl = reviewAssetBaseUrl + '/' + encodeURIComponent('previews/' + previewFileName);\n    out.push({\n      json: {\n        project_id: scriptRow.project_id || json.project_id || '',\n        product_name: scriptRow.product_name || '',\n        target_market: scriptRow.target_market || json.target_market || '',\n        target_language: scriptRow.target_language || json.target_language || '',\n        creative_task_type: scriptRow.creative_task_type || json.creative_task_type || '',\n        selected_concept_id: scriptRow.selected_concept_id || json.selected_concept_id || '',\n        selected_concept_name: scriptRow.selected_concept_name_original || json.selected_concept_name || '',\n        shot_id: shot.shot_id || '',\n        shot_order: panelIndex + 1,\n        panel_index: panelIndex,\n        stage: shot.stage || '',\n        duration: shot.duration || '',\n        duration_start_sec: pe ? pe.start : null,\n        duration_end_sec: pe ? pe.end : null,\n        total_panels: layoutForPanels.panels,\n        grid_rows: layoutForPanels.rows,\n        grid_cols: layoutForPanels.cols,\n        review_round: Number($('组装NanoBanana执行字段').first()?.json?.review_round || json.review_round || 1),\n        auto_reconciled_storyboard: false,\n        video_prompt: videoPrompt,\n        video_prompt_original_zh: videoPromptOriginal,\n        panel_file_name: fileName,\n        panel_image_path: fullPath,\n        panel_preview_path: previewPath,\n        panel_preview_url: previewUrl,\n        panel_mime_type: outputMimeType,\n        panel_preview_mime_type: 'image/jpeg',\n      },\n    });\n    panelIndex++;\n  }\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        840
+      ],
+      "id": "c3d4e5f6-a7b8-9012-cdef-1234567890ab",
+      "name": "六宫格裁切_9x16"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const process = require('process');\nconst fs = require('fs');\nconst path = require('path');\n\nconst items = $input.all();\nif (!items.length) {\n  throw new Error('分镜确认打包：未收到任何裁切分镜');\n}\n\nconst PROJECT_ROOT = process.env.TIKTOK_WORKFLOW_ROOT || process.env.PROJECT_ROOT || process.cwd();\nconst DATA_ROOT = require('process').env.WORKFLOW_DATA_ROOT || require('path').join(require('os').homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data') || require('process').env.AI_VIDEO_RUNTIME_ROOT || PROJECT_ROOT;\nconst reviewContextDir = require('path').join(DATA_ROOT, '.n8n-local-cache', 'review-context');\nfs.mkdirSync(reviewContextDir, { recursive: true });\n\nfunction esc(s) {\n  return String(s ?? '')\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;');\n}\n\nconst first = items[0].json || {};\nconst projectId = first.project_id || 'run';\nconst productName = first.product_name || '';\nconst targetMarket = first.target_market || '';\nconst targetLanguage = first.target_language || '';\nconst creativeTaskType = first.creative_task_type || '';\nconst selectedConceptId = first.selected_concept_id || '';\nconst selectedConceptName = first.selected_concept_name || first.selected_concept_name_original || '';\nconst conceptContextPath = first.concept_context_path || '';\nconst reviewRound = Number(first.review_round || 1);\nconst panels = items.map((item) => ({ ...(item.json || {}) }));\n\nconst contextFileName =\n  'review_context_' +\n  String(projectId || 'run').replace(/[^a-zA-Z0-9_-]+/g, '_') +\n  '_' +\n  reviewRound +\n  '_' +\n  Date.now() +\n  '.json';\nconst contextPath = path.join(reviewContextDir, contextFileName);\nfs.writeFileSync(\n  contextPath,\n  JSON.stringify(\n    {\n      project_id: projectId,\n      product_name: productName,\n      target_market: targetMarket,\n      target_language: targetLanguage,\n      creative_task_type: creativeTaskType,\n      selected_concept_id: selectedConceptId,\n      selected_concept_name: selectedConceptName,\n      concept_context_path: conceptContextPath,\n      panel_count: panels.length,\n      review_round: reviewRound,\n      panel_review_pack: panels,\n    },\n    null,\n    2,\n  ),\n);\n\nlet cards = '';\nfor (const panel of panels) {\n  const title = esc(panel.shot_id || 'shot_' + (panel.shot_order || ''));\n  const meta = esc(\n    [\n      panel.shot_order != null ? '顺序:' + panel.shot_order : '',\n      panel.stage || '',\n      panel.duration || '',\n    ]\n      .filter(Boolean)\n      .join(' | '),\n  );\n  const prompt = esc(panel.video_prompt || '');\n  const previewUrl = esc(panel.panel_preview_url || '');\n  cards +=\n    '<div>' +\n    '<h3>' +\n    title +\n    '</h3>' +\n    '<p>' +\n    meta +\n    '</p>' +\n    (previewUrl\n      ? '<p><img src=\"' + previewUrl + '\" alt=\"' + title + '\" width=\"220\" /></p>'\n      : '<p>预览图暂不可用，请根据镜头编号核对。</p>') +\n    '<p><strong>对应视频提示词</strong></p>' +\n    '<pre>' +\n    prompt +\n    '</pre>' +\n    '<hr />' +\n    '</div>';\n}\n\nconst reviewHtml =\n  '<div>' +\n  '<p><strong>请检查每张切割后的分镜图与对应提示词是否匹配。</strong></p>' +\n  '<p>如果全部合适，选择“确认通过”。如果有问题，选择“需要重做”，并填写需要重做的镜头编号，例如 <code>2, 5</code> 或 <code>shot_2, shot_5</code>，再写清楚修改意见。</p>' +\n  '<p>当前轮次：第 ' +\n  reviewRound +\n  ' 轮，项目：' +\n  esc(projectId) +\n  (productName ? '，产品：' + esc(productName) : '') +\n  '。</p>' +\n  cards +\n  '</div>';\n\nreturn [\n  {\n    json: {\n      project_id: projectId,\n      product_name: productName,\n      panel_count: panels.length,\n      review_round: reviewRound,\n      review_context_path: contextPath,\n      review_form_html: reviewHtml,\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2480,
+        700
+      ],
+      "id": "3ae21dc0-86b4-4f18-9fab-947f08b51301",
+      "name": "分镜确认打包"
+    },
+    {
+      "parameters": {
+        "content": "## Stage 5-6 NanoBanana / 裁切\n\nNanoBanana 仍然保留 Code/helper，因为这里要处理两张图片 inline data 和本地大文件落盘，避免 n8n execution data 爆掉。",
+        "height": 170,
+        "width": 1040,
+        "color": 3
+      },
+      "id": "阶段说明｜Nano",
+      "name": "阶段说明｜Nano",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        620,
+        680
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\n// Robust text extraction — guard against empty string (falsy) vs missing\nconst _rawCandText = item.json?.candidates?.[0]?.content?.parts?.[0]?.text;\nconst rawText = (typeof _rawCandText === 'string' && _rawCandText.trim()) ? _rawCandText : '{}';\n\nlet jsonrepairFn = null;\ntry { jsonrepairFn = require('jsonrepair').jsonrepair; } catch (e) {}\n\nfunction stripMarkdownFences(text) {\n  const raw = String(text || '').trim();\n  if (!raw) return '{}';\n  const tick = String.fromCharCode(96);\n  const fence = tick + tick + tick;\n  const fencedJson = new RegExp(fence + 'json\\\\s*([\\\\s\\\\S]*?)\\\\s*' + fence, 'i');\n  const fencedAny = new RegExp(fence + '\\\\s*([\\\\s\\\\S]*?)\\\\s*' + fence, 'i');\n  const fenced = raw.match(fencedJson) || raw.match(fencedAny);\n  return fenced?.[1] ? fenced[1].trim() : raw;\n}\n\nfunction extractFirstJsonValue(text) {\n  const source = stripMarkdownFences(text);\n  for (const start of [source.indexOf('{'), source.indexOf('[')].filter((x) => x >= 0).sort((a, b) => a - b)) {\n    const open = source[start];\n    const close = open === '{' ? '}' : ']';\n    let depth = 0;\n    let inString = false;\n    let escape = false;\n    for (let i = start; i < source.length; i++) {\n      const ch = source[i];\n      if (inString) {\n        if (escape) escape = false;\n        else if (ch === '\\\\') escape = true;\n        else if (ch === '\"') inString = false;\n        continue;\n      }\n      if (ch === '\"') inString = true;\n      else if (ch === open) depth++;\n      else if (ch === close) {\n        depth--;\n        if (depth === 0) return source.slice(start, i + 1).trim();\n      }\n    }\n  }\n  return source;\n}\n\nfunction parseLlmJson(text) {\n  const extracted = extractFirstJsonValue(text);\n  const candidates = [extracted, stripMarkdownFences(text), String(text || '').trim()].filter(Boolean);\n  const errors = [];\n  for (const candidate of candidates) {\n    try { return JSON.parse(candidate); } catch (e) { errors.push(e.message); }\n    if (jsonrepairFn) {\n      try { return JSON.parse(jsonrepairFn(candidate)); } catch (e) { errors.push('repair: ' + e.message); }\n    }\n  }\n  throw new Error(errors[0] || 'unknown JSON parse error');\n}\n\nlet parsed = {};\ntry {\n  parsed = parseLlmJson(rawText);\n} catch (e) {\n  throw new Error('分镜提示词生成返回无法提取合法 JSON: ' + e.message + '，原始返回前800字=' + String(rawText).slice(0, 800));\n}\n\n// If model returned JSON array wrapping a single object, unwrap it\nif (Array.isArray(parsed) && parsed.length > 0 && typeof parsed[0] === 'object') {\n  parsed = parsed[0];\n}\n\nconst scriptRow = $('读取脚本上下文').first()?.json || {};\nconst shots = Array.isArray(scriptRow.shots) ? scriptRow.shots : [];\nconst expectedTotalPanels = shots.length;\nconst actualTotalPanels = Number(parsed?.storyboard_overview?.total_panels ?? 0);\n\nif (expectedTotalPanels !== 6) {\n  throw new Error('前置 shots 数量异常：当前工作流已强制六宫格，shots 必须为 6，实际为 ' + expectedTotalPanels);\n}\n\nif (actualTotalPanels !== expectedTotalPanels) {\n  throw new Error(\n    '分镜提示词数量校验失败：前置 shots=' +\n      expectedTotalPanels +\n      '，但 storyboard_overview.total_panels=' +\n      actualTotalPanels +\n      '。当前工作流只允许 6 条 shot 对应 6 宫格，请重新生成分镜提示词。',\n  );\n}\n\nreturn [\n  {\n    json: {\n      ...(scriptRow || {}),\n      ...(item.json || {}),\n      project_id: item.json?.project_id || scriptRow.project_id || '',\n      storyboard_overview: parsed.storyboard_overview || {},\n      nanobanana_storyboard_prompt: parsed.nanobanana_storyboard_prompt || '',\n      expected_total_panels: expectedTotalPanels,\n      raw_storyboard_json: parsed,\n      storyboard_json_repair_enabled: true,\n    }\n  }\n];",
+        "mode": "runOnceForAllItems",
+        "language": "javaScript"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        540
+      ],
+      "id": "6d38a03e-41b6-4889-ab30-2c691e048d01",
+      "name": "Code in JavaScript2",
+      "notes": "robust_llm_json_extract_v1: 宽容提取模型返回里的第一段合法 JSON。"
+    },
+    {
+      "id": "337e74ed-5209-45e7-8415-75c9a4ad6f8c",
+      "name": "读取分镜API配置",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1050,
+        540
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const process = require('process');\nconst fs = require('fs'), path = require('path'), os = require('os');\n\nconst KIE_BASE_DEFAULT = 'https://api.kie.ai/api';\nconst KIE_TEXT_MODEL_DEFAULT = 'gemini-3.1-pro';\n\nconst CONFIG_CANDIDATES = [\n  process.env.AI_VIDEO_CONFIG_PATH,\n  path.join(os.homedir(), 'Library', 'Application Support', 'AI Video', 'config', 'local-config.json'),\n  process.env.TIKTOK_WORKFLOW_ROOT ? path.join(process.env.TIKTOK_WORKFLOW_ROOT, '版本测试', 'config', 'local-config.json') : null,\n  process.env.TIKTOK_WORKFLOW_ROOT ? path.join(process.env.TIKTOK_WORKFLOW_ROOT, 'config', 'local-config.json') : null,\n].filter(Boolean);\n\nfunction loadConfigs() {\n  const results = [];\n  for (const p of CONFIG_CANDIDATES) {\n    try { results.push({ path: p, cfg: JSON.parse(fs.readFileSync(p, 'utf8')) }); } catch(_) {}\n  }\n  return results;\n}\n\nfunction readKieKey() {\n  const configs = loadConfigs();\n  for (const { cfg } of configs) {\n    const k = String((cfg.providers?.kie?.api_key) || (cfg.kie || {}).api_key || '').trim();\n    if (k) return k;\n  }\n  return String(process.env.KIE_API_KEY || '').trim() || null;\n}\n\nfunction stripTrailingSlashes(value) {\n  let out = String(value || '').trim();\n  while (out.endsWith('/')) out = out.slice(0, -1);\n  return out;\n}\n\nfunction readKieBaseUrl() {\n  const configs = loadConfigs();\n  for (const { cfg } of configs) {\n    const base = String((cfg.providers?.kie?.base_url) || (cfg.kie?.base_url) || '').trim();\n    if (base) return stripTrailingSlashes(base);\n  }\n  return KIE_BASE_DEFAULT;\n}\n\nfunction readKieTaskModel(stage) {\n  const configs = loadConfigs();\n  for (const { cfg } of configs) {\n    const m = String((cfg.tasks?.[stage]?.model) || '').trim();\n    if (m) return m;\n    const pm = String((cfg.providers?.kie?.text_model) || (cfg.kie?.text_model) || '').trim();\n    if (pm) return pm;\n  }\n  return KIE_TEXT_MODEL_DEFAULT;\n}\n\nfunction kieTextUrl(model, baseUrl) {\n  let origin = stripTrailingSlashes(baseUrl || KIE_BASE_DEFAULT);\n  if (origin.endsWith('/api')) origin = origin.slice(0, -4);\n  return origin + '/' + model + '/v1/chat/completions';\n}\n\nconst rawBody = $json.request_body || {};\nconst kieKey = readKieKey();\nif (!kieKey) throw new Error('缺少 Kie API Key。请在「系统配置」填写 Kie API Key。');\n\nconst KIE_TEXT_MODEL = readKieTaskModel('storyboard_prompt') || KIE_TEXT_MODEL_DEFAULT;\nconst KIE_BASE = readKieBaseUrl();\nconst sysText = (rawBody.system_instruction?.parts?.[0]?.text || '');\nconst userParts = rawBody.contents?.[0]?.parts || [];\nconst messages = [];\nif (sysText) messages.push({ role: 'system', content: sysText });\nconst userContent = [];\nfor (const part of userParts) {\n  if (part.text) userContent.push({ type: 'text', text: part.text });\n  // Text model calls stay text-only for Kie stability; images are reserved for the storyboard image model.\n}\nconst userMsg = userContent.length === 1 && userContent[0].type === 'text'\n  ? { role: 'user', content: userContent[0].text }\n  : { role: 'user', content: userContent };\nmessages.push(userMsg);\nconst kieBody = { model: KIE_TEXT_MODEL, messages, tool_choice: 'none' };\n\nconsole.log('[WF02B] Kie text primary | stage: storyboard_prompt | model:', KIE_TEXT_MODEL);\nreturn [{ json: { ...$json, _adapter: 'kie_openai_chat', _api_key: kieKey, _model: KIE_TEXT_MODEL, _api_url: kieTextUrl(KIE_TEXT_MODEL, KIE_BASE), _auth_header: `Bearer ${kieKey}`, request_body: kieBody } }];"
+      }
+    },
+    {
+      "id": "c3d4e5f6-a7b8-9012-cdef-012233445501",
+      "name": "分镜提示请求体适配",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1115,
+        540
+      ],
+      "parameters": {
+        "jsCode": "// 请求体适配：将分镜提示词请求固定为 Kie OpenAI-compatible 格式\nconst input = $json;\nconst adapter = input._adapter || 'kie_openai_chat';\n\nif (adapter !== 'kie_openai_chat') {\n  throw new Error('WF02B 分镜文本路由已冻结为 Kie OpenAI-compatible，当前 adapter=' + adapter);\n}\n\nconst rawBody = input.request_body || {};\nlet msgs;\nif (Array.isArray(rawBody.messages)) {\n  // Already converted to Kie chat format by upstream config node — pass through directly.\n  msgs = rawBody.messages;\n} else {\n  // Convert system_instruction + contents to OpenAI messages.\n  const sysText = (rawBody.system_instruction?.parts || []).map(p => p.text || '').join('\\\\n').trim();\n  msgs = [];\n  if (sysText) msgs.push({ role: 'system', content: sysText });\n\n  const userParts = [];\n  for (const block of (rawBody.contents || [])) {\n    if ((block.role || 'user') === 'model') continue;\n    for (const part of (block.parts || [])) {\n      if (part.text) userParts.push({ type: 'text', text: part.text });\n      // Text model calls stay text-only for Kie stability; images are reserved for the storyboard image model.\n    }\n  }\n\n  const userContent = (userParts.length === 1 && userParts[0].type === 'text')\n    ? userParts[0].text : userParts;\n  msgs.push({ role: 'user', content: userContent });\n}\n\nconst hasNonEmptyPrompt = msgs.some((m) => {\n  const c = m.content;\n  if (typeof c === 'string') return c.trim().length > 0;\n  if (Array.isArray(c)) return c.some((p) => p.type === 'text' && String(p.text || '').trim().length > 0);\n  return false;\n});\nif (!hasNonEmptyPrompt) {\n  const summary = {\n    adapter,\n    model: input._model || rawBody.model || '?',\n    messages_count: msgs.length,\n    content_types: msgs.map((m) => Array.isArray(m.content) ? 'array[' + m.content.map(p => p.type || '?').join(',') + ']' : typeof m.content),\n    content_lengths: msgs.map((m) => Array.isArray(m.content) ? m.content.length : String(m.content || '').length),\n  };\n  throw new Error('分镜提示请求体为空：未从 request_body.messages 或 contents 中提取到可发送给 Kie 的文本 prompt。' +\n    '摘要（脱敏）：' + JSON.stringify(summary));\n}\n\nconst genCfg = rawBody.generationConfig || {};\nconst body = {\n  model: input._model || rawBody.model || 'gemini-3.1-pro',\n  messages: msgs,\n  tool_choice: 'none',\n};\nif (genCfg.temperature != null) body.temperature = genCfg.temperature;\nif (genCfg.maxOutputTokens) body.max_tokens = genCfg.maxOutputTokens;\n\nreturn [{ json: { ...input, _adapted_body: body, _auth_header: input._auth_header || ('Bearer ' + input._api_key) } }];",
+        "mode": "runOnceForAllItems"
+      }
+    },
+    {
+      "id": "c3d4e5f6-a7b8-9012-cdef-012233445502",
+      "name": "分镜提示响应适配",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1310,
+        540
+      ],
+      "parameters": {
+        "jsCode": "// 响应适配：兼容 OpenAI Chat + Gemini candidates 两种格式，按优先级提取文本\nconst input = $json || {};\nconst adapter = input._adapter || 'kie_openai_chat';\n\nfunction parseMaybe(v) {\n  if (typeof v === 'string') { try { return JSON.parse(v); } catch (_) { return v; } }\n  return v;\n}\n\n// Unwrap n8n HTTP Request double-wrap: { data: \"...json string...\" }\nlet payload = parseMaybe(input.data != null ? input.data : input);\nif (payload && typeof payload === 'object' && payload.data != null && !payload.choices && !payload.candidates) {\n  payload = parseMaybe(payload.data);\n}\n\n// ── Detect API-level errors (Kie error envelope) ──────────────────────────────\nif (payload && typeof payload === 'object') {\n  const errCode = payload.code;\n  const errMsg  = payload.msg || payload.message;\n  if (errCode !== undefined && errMsg && !payload.choices && !payload.candidates) {\n    const hint =\n      String(errCode) === '422' ? '模型不支持或参数错误' :\n      String(errCode) === '401' ? 'API Key 无效' :\n      String(errCode) === '403' ? '账户权限不足或余额不足' :\n      String(errCode) === '429' ? '请求频率超限' : '';\n    throw new Error('Kie API 错误 ' + errCode + ': ' + errMsg + (hint ? '（' + hint + '）' : ''));\n  }\n  if (payload.error && !payload.choices && !payload.candidates) {\n    const e = payload.error;\n    throw new Error('API 错误: ' + (typeof e === 'string' ? e : (e.message || JSON.stringify(e))));\n  }\n}\n\n// ── Detect tool_calls (OpenAI + Gemini) ───────────────────────────────────────\nconst choice0 = payload?.choices?.[0];\nconst cand0   = payload?.candidates?.[0];\n\nconst hasOAIToolCall = Array.isArray(choice0?.message?.tool_calls) && choice0.message.tool_calls.length > 0;\nconst oaiFinishTool  = choice0?.finish_reason === 'tool_calls';\nconst hasCandToolCall = Array.isArray(cand0?.content?.parts) && cand0.content.parts.some(p => p.functionCall);\nconst candFinishTool  = cand0?.finishReason === 'TOOL_CALLS';\n\nif (hasOAIToolCall || oaiFinishTool || hasCandToolCall || candFinishTool) {\n  const toolName = choice0?.message?.tool_calls?.[0]?.function?.name\n    || cand0?.content?.parts?.find(p => p.functionCall)?.functionCall?.name\n    || '(unknown)';\n  throw new Error(\n    '文本模型触发工具调用（' + toolName + '），未返回 JSON 内容。' +\n    '请求中已设置 tool_choice:\"none\"；若仍报此错，请检查 Kie 该模型路由是否支持该参数。'\n  );\n}\n\n// ── Multi-format text extraction (priority order) ─────────────────────────────\nfunction extractText(p) {\n  if (!p || typeof p !== 'object') return null;\n\n  // 1. OpenAI choices[0].message.content\n  const msgContent = choice0?.message?.content ?? choice0?.delta?.content;\n  if (msgContent != null) {\n    const s = typeof msgContent === 'object' ? JSON.stringify(msgContent) : String(msgContent);\n    if (s.trim()) return { text: s, source: 'choices[0].message.content' };\n  }\n\n  // 2. Gemini candidates[0].content.parts[*].text\n  if (cand0?.content?.parts?.length > 0) {\n    const joined = cand0.content.parts.map(pt => (typeof pt.text === 'string' ? pt.text : '')).join('').trim();\n    if (joined) return { text: joined, source: 'candidates[0].content.parts' };\n  }\n\n  // 3. Flat content.parts[*].text\n  if (Array.isArray(p.content?.parts)) {\n    const joined = p.content.parts.map(pt => (typeof pt.text === 'string' ? pt.text : '')).join('').trim();\n    if (joined) return { text: joined, source: 'content.parts' };\n  }\n\n  // 4. Flat scalar fields\n  for (const key of ['text', 'output_text', 'response']) {\n    if (p[key] && typeof p[key] === 'string' && p[key].trim()) return { text: p[key], source: key };\n  }\n\n  return null;\n}\n\nconst extracted = extractText(payload);\n\nif (!extracted) {\n  const modelVersion = payload?.modelVersion || payload?.model || '?';\n  const responseId   = payload?.responseId  || payload?.id    || '?';\n  const finishReason = choice0?.finish_reason || cand0?.finishReason || '?';\n  const keys = Object.keys(payload || {}).join(', ');\n  throw new Error(\n    '分镜提示响应没有可用文本内容。' +\n    'modelVersion=' + modelVersion + ' responseId=' + responseId + ' finishReason=' + finishReason + '。' +\n    '可用字段=' + keys + '。' +\n    '响应前400字=' + JSON.stringify(payload).slice(0, 400)\n  );\n}\n\nreturn [{ json: {\n  ...input,\n  candidates: [{ content: { parts: [{ text: extracted.text }] } }],\n  _response_source: extracted.source,\n  _raw_kie_response: {\n    choices:      payload?.choices,\n    candidates:   payload?.candidates,\n    usage:        payload?.usage,\n    model:        payload?.model,\n    modelVersion: payload?.modelVersion,\n  },\n}}];\n",
+        "mode": "runOnceForAllItems"
+      }
+    }
+  ],
+  "connections": {
+    "storyboard_generate_resume": {
+      "main": [
+        [
+          {
+            "node": "读取脚本上下文",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取脚本上下文": {
+      "main": [
+        [
+          {
+            "node": "Prompt Library",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Nano前_轻量上下文",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge3_6grid",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Prompt Library": {
+      "main": [
+        [
+          {
+            "node": "Merge3_6grid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge3_6grid": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "读取分镜API配置",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "分镜图提示词生成": {
+      "main": [
+        [
+          {
+            "node": "分镜提示响应适配",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Merge3_6grid1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nano前_轻量上下文": {
+      "main": [
+        [
+          {
+            "node": "Merge3_6grid1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge3_6grid1": {
+      "main": [
+        [
+          {
+            "node": "本地图片转Gemini输入",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "本地图片转Gemini输入": {
+      "main": [
+        [
+          {
+            "node": "组装NanoBanana执行字段",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "组装NanoBanana执行字段": {
+      "main": [
+        [
+          {
+            "node": "nano banana",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "nano banana": {
+      "main": [
+        [
+          {
+            "node": "提取NanoBanana返回图片",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "提取NanoBanana返回图片": {
+      "main": [
+        [
+          {
+            "node": "NanoBanana结果落盘",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NanoBanana结果落盘": {
+      "main": [
+        [
+          {
+            "node": "六宫格裁切_9x16",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "六宫格裁切_9x16": {
+      "main": [
+        [
+          {
+            "node": "分镜确认打包",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "分镜确认打包": {
+      "main": [
+        []
+      ]
+    },
+    "读取分镜API配置": {
+      "main": [
+        [
+          {
+            "node": "分镜提示请求体适配",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "分镜提示请求体适配": {
+      "main": [
+        [
+          {
+            "node": "分镜图提示词生成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "分镜提示响应适配": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "pinData": {},
+  "versionId": "640b8ada-13a6-4737-b311-817316a31e05",
+  "meta": {
+    "source_workflow": "conceptSelectStoryboardV1",
+    "split_part": "WF02B",
+    "review_hub_url": "http://127.0.0.1:18788/reviews"
+  },
+  "tags": []
+}

@@ -1,0 +1,232 @@
+{
+  "_meta": {
+    "version": "v1.0",
+    "updated_at": "2026-04-29",
+    "description": "创作任务类型硬约束映射。除非 creative_task_type 为空或显式为自动判断，否则后续所有阶段必须优先服从这里的规则。"
+  },
+  "种草口播": {
+    "video_type": "local_voiceover",
+    "style": "local TikTok creator product recommendation",
+    "script_focus": [
+      "strong hook",
+      "real sharing",
+      "product benefit",
+      "trust building",
+      "soft CTA"
+    ],
+    "voiceover_required": true,
+    "visual_focus": [
+      "creator face",
+      "product in hand",
+      "real usage",
+      "natural reaction"
+    ],
+    "avoid": [
+      "hard selling",
+      "brand commercial tone",
+      "over-scripted speech"
+    ],
+    "recommended_grid": "6_grid"
+  },
+  "开箱展示": {
+    "video_type": "pure_display_or_light_voiceover",
+    "style": "real unboxing showcase",
+    "script_focus": [
+      "package",
+      "opening action",
+      "first impression",
+      "product reveal",
+      "detail display"
+    ],
+    "voiceover_required": false,
+    "visual_focus": [
+      "hands",
+      "packaging",
+      "product reveal",
+      "first look",
+      "detail close-up"
+    ],
+    "avoid": [
+      "too much talking",
+      "fake luxury commercial",
+      "over-polished setup"
+    ],
+    "recommended_grid": "6_grid"
+  },
+  "沉浸式开箱": {
+    "video_type": "pure_display",
+    "style": "immersive unboxing with close-up details",
+    "script_focus": [
+      "hands",
+      "texture",
+      "slow reveal",
+      "detail shots",
+      "realistic environment"
+    ],
+    "voiceover_required": false,
+    "visual_focus": [
+      "hand movement",
+      "texture",
+      "package sound feeling",
+      "close-up details",
+      "calm rhythm"
+    ],
+    "avoid": [
+      "strong voiceover",
+      "fast camera movement",
+      "hard CTA",
+      "commercial ad tone"
+    ],
+    "recommended_grid": "6_grid"
+  },
+  "产品卖点展示": {
+    "video_type": "mixed",
+    "style": "product benefit demonstration",
+    "script_focus": [
+      "core selling points",
+      "usage demo",
+      "detail close-up",
+      "result",
+      "soft CTA"
+    ],
+    "voiceover_required": "optional",
+    "visual_focus": [
+      "before-after",
+      "feature demo",
+      "detail proof",
+      "result scene"
+    ],
+    "avoid": [
+      "empty concept",
+      "no product proof",
+      "unrealistic effect claim"
+    ],
+    "recommended_grid": "6_grid"
+  },
+  "故事剧情带货": {
+    "video_type": "story_drama",
+    "style": "TikTok UGC short drama — real-life micro-awkward moments, small misunderstandings, subtle contrast; one simple action per shot; natural product placement; no theatrical exaggeration",
+    "script_focus": [
+      "【前0-3秒 Drama Hook — 真实生活小尴尬/小误会开场】画面第一秒必须有一个具体可见的小尴尬、小误会或小痛点：包包太小装不下、开拉链卡住、东西散落一地、找不到钥匙、小摩擦等真实日常。不要平铺直叙，不要温和开场，但也不要戏剧化夸张表演。冲突必须与产品核心卖点相关。保持真实生活 UGC 感——是路人真实事件，不是网红剧情片。前3秒内不出产品实物，产品在 shot_3 以剧情道具方式自然登场。",
+      "【中段 Problem Build-up】痛点或困扰持续存在：微压力/微尴尬升级，人物反应自然真实，不做夸张表情和肢体动作，每个镜头只有一个简单动作",
+      "【产品进入 Product Turn】产品作为剧情转折关键道具自然登场（解决小困扰/带来小惊喜），绝不硬广植入",
+      "【高潮 Key Moment】展示产品使用/关键转折/效果呈现，情绪从轻微不适转向满意或惊喜，保持真实克制",
+      "【结尾 Payoff + Soft CTA】日常问题被轻松解决的满足感/小反转 + 轻 CTA（真实推荐，不要硬销售）"
+    ],
+    "voiceover_required": true,
+    "visual_focus": [
+      "自然情绪特写 — 微尴尬/微惊喜/轻松满足的真实表情（无夸张颜艺）",
+      "日常生活小反差场景 — 具体可见的小痛点 vs 解决后的满意状态",
+      "产品作为情节道具的自然入镜",
+      "UGC 手持真实感 — 真实场景，不要过度制作",
+      "每个镜头一个主体动作 — 低穿模风险，简单清晰"
+    ],
+    "avoid": [
+      "夸张颜艺/大幅肢体动作（过度夸张的面部表情、失控奔跑/摔倒/哭喊）",
+      "影视剧表演感（不要演技化、走秀式或戏剧化镜头语言）",
+      "复杂多人互动场景（每个镜头只有一个主体角色和一个简单动作）",
+      "单镜头内连续多个动作或快速切换（高穿模风险）",
+      "平淡生活流开场（slow, mundane, no hook）",
+      "功能参数罗列（feature list enumeration）",
+      "品牌广告腔（brand commercial tone / polished spokesperson）",
+      "前5秒硬 CTA 或直接安利产品",
+      "故事逻辑牵强 — 产品进入场景不自然",
+      "前3秒内出现产品实物（product must not appear before shot_3）",
+      "在同一 shot/panel 内拼接 before/after 对比图（必须拆为两个独立 shot 顺序表达）",
+      "冲突/痛点与产品卖点无关的戏剧化场景（drama must connect to the product pain point）"
+    ],
+    "script_structure": {
+      "shot_1": "真实生活小尴尬/小误会 Hook — 一个具体场景和动作，前3秒抓住注意力（不要夸张失控，不要大幅肢体动作）",
+      "shot_2": "痛点/困扰持续显现 — 微压力/微困扰，人物自然反应，单一简单动作，无戏剧化爆发",
+      "shot_3": "产品自然进入剧情 — 作为解决小困扰/带来小惊喜的关键道具，绝不是硬广",
+      "shot_4": "关键使用过程 — 产品使用中的一个动作，效果开始显现，简单清晰",
+      "shot_5": "结果呈现 — 问题解决后的满意/轻松状态，真实克制的情绪反应",
+      "shot_6": "轻 CTA/真实推荐/评论区互动 — 自然收尾，不硬销售"
+    },
+    "recommended_grid": "6_grid"
+  },
+  "真实故事剧情": {
+    "video_type": "story_drama",
+    "style": "TikTok UGC short drama — real-life micro-awkward moments, small misunderstandings, subtle contrast; one simple action per shot; natural product placement; no theatrical exaggeration",
+    "script_focus": [
+      "【前0-3秒 Drama Hook — 真实生活小尴尬/小误会开场】画面第一秒必须有一个具体可见的小尴尬、小误会或小痛点：包包太小装不下、开拉链卡住、东西散落一地、找不到钥匙、小摩擦等真实日常。不要平铺直叙，不要温和开场，但也不要戏剧化夸张表演。冲突必须与产品核心卖点相关。保持真实生活 UGC 感——是路人真实事件，不是网红剧情片。前3秒内不出产品实物，产品在 shot_3 以剧情道具方式自然登场。",
+      "【中段 Problem Build-up】痛点或困扰持续存在：微压力/微尴尬升级，人物反应自然真实，不做夸张表情和肢体动作，每个镜头只有一个简单动作",
+      "【产品进入 Product Turn】产品作为剧情转折关键道具自然登场（解决小困扰/带来小惊喜），绝不硬广植入",
+      "【高潮 Key Moment】展示产品使用/关键转折/效果呈现，情绪从轻微不适转向满意或惊喜，保持真实克制",
+      "【结尾 Payoff + Soft CTA】日常问题被轻松解决的满足感/小反转 + 轻 CTA（真实推荐，不要硬销售）"
+    ],
+    "voiceover_required": true,
+    "visual_focus": [
+      "自然情绪特写 — 微尴尬/微惊喜/轻松满足的真实表情（无夸张颜艺）",
+      "日常生活小反差场景 — 具体可见的小痛点 vs 解决后的满意状态",
+      "产品作为情节道具的自然入镜",
+      "UGC 手持真实感 — 真实场景，不要过度制作",
+      "每个镜头一个主体动作 — 低穿模风险，简单清晰"
+    ],
+    "avoid": [
+      "夸张颜艺/大幅肢体动作（过度夸张的面部表情、失控奔跑/摔倒/哭喊）",
+      "影视剧表演感（不要演技化、走秀式或戏剧化镜头语言）",
+      "复杂多人互动场景（每个镜头只有一个主体角色和一个简单动作）",
+      "单镜头内连续多个动作或快速切换（高穿模风险）",
+      "平淡生活流开场（slow, mundane, no hook）",
+      "功能参数罗列（feature list enumeration）",
+      "品牌广告腔（brand commercial tone / polished spokesperson）",
+      "前5秒硬 CTA 或直接安利产品",
+      "故事逻辑牵强 — 产品进入场景不自然",
+      "前3秒内出现产品实物（product must not appear before shot_3）",
+      "在同一 shot/panel 内拼接 before/after 对比图（必须拆为两个独立 shot 顺序表达）",
+      "冲突/痛点与产品卖点无关的戏剧化场景（drama must connect to the product pain point）"
+    ],
+    "script_structure": {
+      "shot_1": "真实生活小尴尬/小误会 Hook — 一个具体场景和动作，前3秒抓住注意力（不要夸张失控，不要大幅肢体动作）",
+      "shot_2": "痛点/困扰持续显现 — 微压力/微困扰，人物自然反应，单一简单动作，无戏剧化爆发",
+      "shot_3": "产品自然进入剧情 — 作为解决小困扰/带来小惊喜的关键道具，绝不是硬广",
+      "shot_4": "关键使用过程 — 产品使用中的一个动作，效果开始显现，简单清晰",
+      "shot_5": "结果呈现 — 问题解决后的满意/轻松状态，真实克制的情绪反应",
+      "shot_6": "轻 CTA/真实推荐/评论区互动 — 自然收尾，不硬销售"
+    },
+    "recommended_grid": "6_grid"
+  },
+  "爆点故事剧情": {
+    "video_type": "story_drama",
+    "style": "TikTok UGC short drama — high-impact social embarrassment, extreme emotion close-ups, strong dramatic reversal; one simple action per shot; product as key plot device; UGC authenticity preserved",
+    "script_focus": [
+      "【前0-3秒 Drama Hook — 极致冲突开场】画面第一秒必须有强冲突/强反差/尴尬社死瞬间：被当众嘲笑/公开失败/身份反差/突然爆发的小窘境。冲突必须与产品核心卖点强相关，不能为戏剧化乱编无关场景。前3秒内不出产品实物，产品在 shot_3 以剧情转折道具方式自然登场。保持 UGC 手持感——是路人真实事件，不是网红表演。",
+      "【中段 Conflict Escalation】问题持续升级：人物误会/社交压力/情绪爆点，人物反应可夸张但每个镜头只有一个简单动作；不要多人混乱互动，不要奔跑/摔倒/哭喊失控",
+      "【产品进入 Product Turn】产品作为剧情转折关键道具自然登场（解决危机/制造反转），绝不是硬广植入",
+      "【高潮 Key Moment】产品使用带来的戏剧性转折，情绪从尴尬/不适快速反转向惊喜/满足，保持单动作清晰",
+      "【结尾 Payoff + Soft CTA】情绪释放爽点/身份小逆转 + 自然轻 CTA（真实推荐，不要硬销售）"
+    ],
+    "voiceover_required": true,
+    "visual_focus": [
+      "极致情绪特写 — 强尴尬/惊喜/释放的真实表情（可夸张，但不要颜艺失控）",
+      "强反差冲突场景 — 具体痛点状态 vs 产品解决后的满意状态",
+      "产品作为情节道具的自然入镜",
+      "UGC 手持真实感 — 真实场景，不要过度制作",
+      "每个镜头一个主体动作 — 保持穿模低风险"
+    ],
+    "avoid": [
+      "奔跑/摔倒/哭喊失控等大幅肢体动作（高穿模风险，视频生成容易崩坏）",
+      "复杂多人互动场景（每个镜头只有一个主体角色和一个简单动作）",
+      "单镜头内连续多个动作或快速切换（高穿模风险）",
+      "影视剧表演感/走秀式镜头语言（保持真实 UGC 感）",
+      "平淡生活流开场（slow, mundane, no hook）",
+      "功能参数罗列（feature list enumeration）",
+      "品牌广告腔（brand commercial tone / polished spokesperson）",
+      "前5秒硬 CTA 或直接安利产品",
+      "故事逻辑牵强 — 产品进入场景不自然",
+      "前3秒内出现产品实物（product must not appear before shot_3）",
+      "在同一 shot/panel 内拼接 before/after 对比图（必须拆为两个独立 shot 顺序表达）",
+      "冲突/痛点与产品卖点无关的戏剧化场景（drama must connect to the product pain point）"
+    ],
+    "script_structure": {
+      "shot_1": "极致冲突/尴尬/社死瞬间 Hook — 一个具体场景和动作，前3秒强抓注意力（保持单动作，无失控肢体）",
+      "shot_2": "人物状态升级/情绪爆点 — 误会/社交压力，人物反应可夸张但单一简单动作，无多人混乱",
+      "shot_3": "产品自然进入剧情 — 作为解决危机/制造反转的关键道具，绝不是硬广",
+      "shot_4": "关键使用过程/戏剧性转折 — 产品使用一个动作，效果开始显现，情绪开始反转",
+      "shot_5": "结果呈现/情绪释放 — 问题解决后的满意/惊喜状态，真实可信的情绪反应",
+      "shot_6": "轻 CTA/真实推荐/评论区互动 — 自然收尾，不硬销售"
+    },
+    "recommended_grid": "6_grid"
+  }
+}

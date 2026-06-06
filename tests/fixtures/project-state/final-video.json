@@ -1,0 +1,18 @@
+{
+  "projectState": {
+    "project_id": "proj_fixture_008",
+    "stage": "video_generating"
+  },
+  "projectFiles": {
+    "reviewContexts": [
+      "review_context_proj_fixture_008_001.json"
+    ],
+    "expectedVideoClipCount": 6,
+    "videoClipCount": 6,
+    "finalVideo": "final_proj_fixture_008.mp4"
+  },
+  "options": {
+    "reviewContext": "review_context_proj_fixture_008_001.json"
+  }
+}
+

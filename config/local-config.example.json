@@ -1,0 +1,106 @@
+{
+  "_comment": "复制此文件为 local-config.json 并按本机实际填写。API Key 存文件路径，不要直接写明文 Key。",
+  "gemini_api_key_file": "",
+  "gemini_text_model": "gemini-3-flash-preview",
+  "gemini_image_model": "gemini-3.1-flash-image-preview",
+  "video_output_dir": "",
+  "storyboard_output_dir": "",
+  "n8n_host": "http://localhost:5678",
+  "n8n_form_workflow_id": "rKHHjD2QBlL6EhaM",
+  "https_proxy": "",
+  "providers": {
+    "kie": {
+      "label": "Kie.ai 中转站",
+      "api_key": "",
+      "base_url": "https://api.kie.ai/api",
+      "text_base_url": "",
+      "text_model": "gemini-3.1-pro",
+      "image_model": "nano-banana-pro",
+      "video_model": "veo3_lite"
+    },
+    "google": {
+      "label": "Google Gemini 官方",
+      "api_key": "",
+      "base_url": "https://generativelanguage.googleapis.com",
+      "text_model": "gemini-3-flash-preview",
+      "image_model": "gemini-3.1-flash-image-preview"
+    }
+  },
+  "tasks": {
+    "creative_direction": {
+      "provider": "kie",
+      "route": "openai_chat",
+      "model": "gemini-3.1-pro"
+    },
+    "script_framework": {
+      "provider": "kie",
+      "route": "openai_chat",
+      "model": "gemini-3.1-pro"
+    },
+    "storyboard_prompt": {
+      "provider": "kie",
+      "route": "openai_chat",
+      "model": "gemini-3.1-pro"
+    },
+    "storyboard_image": {
+      "provider": "kie",
+      "route": "kie_market_image",
+      "model": "nano-banana-pro"
+    },
+    "image_to_video": {
+      "provider": "kie",
+      "route": "kie_veo31",
+      "model": "veo3_lite"
+    }
+  },
+  "kie": {
+    "api_key": "",
+    "base_url": "https://api.kie.ai/api",
+    "text_base_url": "",
+    "text_model": "gemini-3.1-pro",
+    "image_model": "nano-banana-pro",
+    "video_model": "veo3_lite"
+  },
+  "gemini": {
+    "api_key": "",
+    "base_url": "https://generativelanguage.googleapis.com",
+    "text_model": "gemini-3-flash-preview",
+    "image_model": "gemini-3.1-flash-image-preview"
+  },
+  "adapters": {
+    "text": "kie_openai_chat",
+    "image": "kie_market_image",
+    "video": "kie_veo31"
+  },
+  "apis": {
+    "creative_direction": {
+      "api_key": "",
+      "base_url": "https://api.kie.ai/api",
+      "model": "gemini-3.1-pro"
+    },
+    "script_framework": {
+      "api_key": "",
+      "base_url": "https://api.kie.ai/api",
+      "model": "gemini-3.1-pro"
+    },
+    "storyboard_image": {
+      "api_key": "",
+      "base_url": "https://api.kie.ai/api",
+      "model": "nano-banana-pro"
+    },
+    "image_to_video": {
+      "api_key": "",
+      "base_url": "https://api.kie.ai/api",
+      "model": "veo3_lite",
+      "provider": "kie_veo31"
+    }
+  },
+  "output": {
+    "storyboard_dir": "",
+    "video_dir": ""
+  },
+  "services": {
+    "n8n_host": "http://localhost:5678",
+    "workspace_host": "http://127.0.0.1:18788"
+  }
+}

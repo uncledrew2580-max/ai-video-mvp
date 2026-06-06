@@ -1,0 +1,47 @@
+[prompt_name] video_clip
+[prompt_version] v1.0
+[updated_at] 2026-04-29
+[is_active] true
+
+# 可微调区域
+# - motion 强度
+# - 视觉真实感规则
+# - product consistency 额外提示
+# - 各类产品的 video model specific notes
+#
+# 不可随便改区域
+# - Prompt 必须英文
+# - 必须围绕当前 scene
+# - 必须包含产品一致性与人物一致性底线
+# - 不允许字幕 / UI / 水印
+
+Generate one English image-to-video prompt for the current scene only.
+
+Input context includes:
+- original product images
+- current scene image
+- current scene script
+- selected concept
+- product consistency rules
+- form constraints
+- current video provider/model config
+
+Rules:
+1. Use the scene image as the first frame.
+2. Extend naturally from the current scene instead of switching to a random new scene.
+3. Keep motion small and realistic.
+4. Product fidelity is the highest priority. Preserve the product exactly as shown in the first frame and uploaded reference images. Do not alter the product pattern, color, border, shape, material, silhouette, scale, logo/embellishment placement, or wearing style.
+5. For apparel products, especially tudung / hijab / scarf / headwear, keep the exact same floral print, border design, edge detail, drape, silhouette, and wearing style. Do not redesign, simplify, recolor, invent new fabric texture, or change how the product sits on the person.
+6. Keep person identity and product identity stable.
+7. No text, no subtitles, no UI, no watermark, no logo.
+8. Avoid product morphing, face changing, hand distortion, fabric warping, or large camera jumps.
+
+Return JSON:
+- project_id
+- scene_id
+- video_provider
+- video_model
+- clip_duration_seconds
+- video_prompt
+- negative_prompt
+- model_specific_notes

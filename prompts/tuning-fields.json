@@ -1,0 +1,126 @@
+{
+  "_schema_version": "1.0",
+  "_description": "业务微调字段结构定义。这些字段由客户端暴露给普通用户，映射到 prompt_center.json 的 stable_mode 配置，不允许直接拼入裸 API body。字段值由 n8n Prompt Library 节点读取并注入模板。",
+  "creative_direction": {
+    "_description": "创意方向阶段（WF01）的用户微调字段",
+    "fields": {
+      "creative_preference": {
+        "label": "创意偏好",
+        "type": "text",
+        "placeholder": "例：生活化、轻奢、幽默感强",
+        "max_length": 200,
+        "prompt_slot": "{{creative_preference}}"
+      },
+      "avoid_direction": {
+        "label": "避免方向",
+        "type": "text",
+        "placeholder": "例：不要过于夸张、不要出现价格文字",
+        "max_length": 200,
+        "prompt_slot": "{{avoid_direction}}"
+      },
+      "target_audience_extra": {
+        "label": "目标人群补充",
+        "type": "text",
+        "placeholder": "例：25-35岁穆斯林女性、注重性价比",
+        "max_length": 200,
+        "prompt_slot": "{{target_audience_extra}}"
+      },
+      "tone_style": {
+        "label": "语气风格",
+        "type": "select",
+        "options": ["温暖亲切", "专业权威", "年轻活泼", "高端简约"],
+        "prompt_slot": "{{tone_style}}"
+      }
+    }
+  },
+  "script_framework": {
+    "_description": "脚本框架阶段（WF02a）的用户微调字段",
+    "fields": {
+      "shot_pacing": {
+        "label": "镜头节奏偏好",
+        "type": "select",
+        "options": ["快节奏（每镜头2-3秒）", "中节奏（每镜头4-5秒）", "慢节奏（每镜头6秒以上）"],
+        "prompt_slot": "{{shot_pacing}}"
+      },
+      "must_include_selling_points": {
+        "label": "必须出现卖点",
+        "type": "text",
+        "placeholder": "例：防晒面料、可机洗、多色可选",
+        "max_length": 300,
+        "prompt_slot": "{{must_include_selling_points}}"
+      },
+      "forbidden_scenes": {
+        "label": "禁止出现场景/动作",
+        "type": "text",
+        "placeholder": "例：不要出现男性、不要室外场景",
+        "max_length": 200,
+        "prompt_slot": "{{forbidden_scenes}}"
+      }
+    }
+  },
+  "storyboard_image": {
+    "_description": "分镜图生成阶段（WF02b）的用户微调字段",
+    "fields": {
+      "storyboard_style_note": {
+        "label": "分镜图片风格补充",
+        "type": "text",
+        "placeholder": "例：真实感强、避免AI感、明亮自然光",
+        "max_length": 200,
+        "prompt_slot": "{{storyboard_style_note}}"
+      },
+      "character_consistency_note": {
+        "label": "人物/场景/构图一致性补充",
+        "type": "text",
+        "placeholder": "例：同一个穆斯林女性、白色简约室内",
+        "max_length": 200,
+        "prompt_slot": "{{character_consistency_note}}"
+      },
+      "product_display_note": {
+        "label": "产品展示要求",
+        "type": "text",
+        "placeholder": "例：产品标签清晰可见、颜色还原准确",
+        "max_length": 200,
+        "prompt_slot": "{{product_display_note}}"
+      },
+      "avoid_elements": {
+        "label": "分镜避免元素",
+        "type": "text",
+        "placeholder": "例：不要出现文字水印、不要模糊背景",
+        "max_length": 200,
+        "prompt_slot": "{{avoid_elements}}"
+      }
+    }
+  },
+  "video_generation": {
+    "_description": "视频生成阶段（WF03）的用户微调字段（单镜头重做时使用）",
+    "fields": {
+      "redo_reason": {
+        "label": "单镜头重做原因",
+        "type": "text",
+        "placeholder": "例：产品出现变形、人物动作不自然",
+        "max_length": 300,
+        "prompt_slot": "{{redo_reason}}"
+      },
+      "motion_adjustment": {
+        "label": "动作微调",
+        "type": "text",
+        "placeholder": "例：动作放慢、手部动作更自然",
+        "max_length": 200,
+        "prompt_slot": "{{motion_adjustment}}"
+      },
+      "camera_motion": {
+        "label": "镜头运动强弱",
+        "type": "select",
+        "options": ["静止/轻微晃动", "中等运动", "明显推拉/移动"],
+        "prompt_slot": "{{camera_motion}}"
+      },
+      "product_requirement": {
+        "label": "产品展示要求",
+        "type": "text",
+        "placeholder": "例：产品正面清晰展示至少2秒",
+        "max_length": 200,
+        "prompt_slot": "{{product_requirement}}"
+      }
+    }
+  }
+}

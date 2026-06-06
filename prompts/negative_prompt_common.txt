@@ -1,0 +1,6 @@
+[prompt_name] negative_prompt_common
+[prompt_version] v1.0
+[updated_at] 2026-04-29
+[is_active] true
+
+text, subtitles, caption, logo, watermark, ui, buttons, app overlay, extra fingers, distorted hands, broken face, face swapping, product morphing, product color change, wrong material, wrong scale, unstable identity, random background jump, cinematic commercial look, studio ad look

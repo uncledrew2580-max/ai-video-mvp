@@ -1,0 +1,16 @@
+{
+  "projectState": {
+    "project_id": "proj_fixture_004",
+    "stage": "storyboard_generating"
+  },
+  "projectFiles": {
+    "confirmedScriptContext": "confirmed_script_context_proj_fixture_004.json",
+    "reviewContexts": [
+      "review_context_proj_fixture_004_001.json"
+    ]
+  },
+  "options": {
+    "reviewContext": "review_context_proj_fixture_004_001.json"
+  }
+}
+

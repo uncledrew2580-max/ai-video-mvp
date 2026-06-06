@@ -1,0 +1,447 @@
+{
+  "id": "scriptGenerateV1",
+  "name": "TikTok续跑｜创意确认→脚本框架",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "storyboard-concept-select-v1",
+        "responseMode": "onReceived",
+        "options": {
+          "noResponseBody": true,
+          "responseCode": {
+            "values": {
+              "responseCode": 204
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -900,
+        80
+      ],
+      "id": "concept-select-webhook-v1",
+      "name": "concept_select_resume"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json || {};\nconst body = row.body && typeof row.body === 'object' ? row.body : row;\nreturn [{ json: {\n  ...body,\n  project_id: body.project_id || '',\n  selected_concept_id: body.selected_concept_id || body.concept_id || '',\n  concept_context_path: body.concept_context_path || body.context_path || '',\n  review_after_generation: true,\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        80
+      ],
+      "id": "concept-select-normalize-v1",
+      "name": "concept_select_normalize"
+    },
+    {
+      "parameters": {
+        "jsCode": "const process = require('process');\nconst fs = require('fs');\nconst path = require('path');\n\nconst row = $input.first().json || {};\nconst PROJECT_ROOT = process.env.TIKTOK_WORKFLOW_ROOT || process.env.PROJECT_ROOT || process.cwd();\nconst DATA_ROOT = require('process').env.WORKFLOW_DATA_ROOT || require('path').join(require('os').homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data') || require('process').env.AI_VIDEO_RUNTIME_ROOT || PROJECT_ROOT;\nconst contextDir = require('path').join(DATA_ROOT, '.n8n-local-cache', 'concept-context');\nconst selectedDir = require('path').join(DATA_ROOT, '.n8n-local-cache', 'selected-concepts');\nconst projectDir = require('path').join(DATA_ROOT, '.n8n-local-cache', 'project-state');\nfs.mkdirSync(selectedDir, { recursive: true });\nfs.mkdirSync(projectDir, { recursive: true });\n\nconst projectId = String(row.project_id || '').trim();\nconst selectedConceptId = String(row.selected_concept_id || '').trim();\nconst contextPath = String(row.concept_context_path || '').trim() || path.join(contextDir, 'concept_context_' + projectId + '.json');\n\nif (!projectId) {\n  throw new Error('concept_select_restore：缺少 project_id');\n}\nif (!selectedConceptId) {\n  throw new Error('concept_select_restore：缺少 selected_concept_id');\n}\nif (!fs.existsSync(contextPath)) {\n  throw new Error('concept_select_restore：concept_context 不存在 ' + contextPath);\n}\n\nconst context = JSON.parse(fs.readFileSync(contextPath, 'utf8'));\nconst concepts = Array.isArray(context.creative_concepts)\n  ? context.creative_concepts\n  : JSON.parse(context.creative_concepts_json || '[]');\nif (!Array.isArray(concepts) || !concepts.length) {\n  throw new Error('concept_select_restore：creative_concepts 为空');\n}\n\nconst selectedIndex = concepts.findIndex((concept) => String(concept.concept_id || '') === selectedConceptId);\nif (selectedIndex < 0) {\n  throw new Error('concept_select_restore：selected_concept_id 未匹配到创意方向 ' + selectedConceptId);\n}\n\n\nconst selectedConcept = concepts[selectedIndex];\n\n// Read user revision overrides and merge into final concept\nconst revisionDir = path.join(DATA_ROOT, '.n8n-local-cache', 'concept-revisions');\nconst revisionFilePath = path.join(revisionDir, 'concept_revisions_' + projectId.replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json');\nlet revisionFields = {};\ntry {\n  if (fs.existsSync(revisionFilePath)) {\n    // concept_revisions structure: { revisions: { concept_id: { fields: {...} } } }\n    const revData = JSON.parse(fs.readFileSync(revisionFilePath, 'utf8'));\n    const entry = (revData.revisions || {})[selectedConceptId] || {};\n    if (entry.fields && typeof entry.fields === 'object') revisionFields = entry.fields;\n  }\n} catch (e) {}\nconst finalConcept = { ...selectedConcept, ...revisionFields };\nconst selectedPayload = {\n  project_id: projectId,\n  selected_concept_id: selectedConceptId,\n  selected_concept_index: selectedIndex,\n  selected_concept_json: finalConcept,\n  selected_at: new Date().toISOString(),\n};\nconst selectedPath = path.join(selectedDir, 'selected_concept_' + String(projectId).replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json');\nfs.writeFileSync(selectedPath, JSON.stringify(selectedPayload, null, 2));\nconst projectStatePath = path.join(projectDir, 'project_' + String(projectId).replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json');\nfs.writeFileSync(projectStatePath, JSON.stringify({\n  project_id: projectId,\n  product_name: context.product_name || '',\n  target_market: context.target_market || '',\n  target_language: context.target_language || '',\n  creative_task_type: context.creative_task_type || '',\n  selected_concept_id: selectedConceptId,\n  status: row.manual_regeneration_requested ? 'storyboard_regenerating' : 'concept_selected',\n  updated_at: new Date().toISOString(),\n}, null, 2));\n\nreturn [{ json: {\n  ...context,\n  project_id: projectId,\n  selected_concept_id: selectedConceptId,\n  selected_concept_index: selectedIndex,\n  selected_concept_name: finalConcept.concept_name || '',\n  selected_concept_json: JSON.stringify(finalConcept),\n  selected_concept: finalConcept,\n  concept_context_path: contextPath,\n  selected_concept_record_path: selectedPath,\n  status: row.manual_regeneration_requested ? 'storyboard_regenerating' : 'concept_selected',\n  target_user: finalConcept.target_user || '',\n  usage_scene: finalConcept.usage_scene || '',\n  visual_expression: finalConcept.visual_expression || '',\n  hook_strategy: finalConcept.hook_strategy || '',\n  model_profile: finalConcept.model_profile || '',\n  core_selling_angle: finalConcept.core_selling_angle || '',\n  why_it_fits_tiktok: finalConcept.why_it_fits_tiktok || '',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -380,
+        80
+      ],
+      "id": "concept-select-restore-v1",
+      "name": "concept_select_restore"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst os = require('os');\n\nconst input = $input.first();\nconst baseJson = input?.json || {};\nconst baseBinary = input?.binary || {};\n\nfunction projectRoot() {\n  const env = require('process').env || {};\n  const candidates = [env.TIKTOK_WORKFLOW_ROOT, env.PROJECT_ROOT, require('process').cwd()].filter(Boolean);\n  for (const root of candidates) {\n    try { if (fs.existsSync(path.join(root, 'prompts', 'prompt_center.json'))) return root; } catch (_e) {}\n  }\n  throw new Error('Prompt Library: prompts/prompt_center.json not found. Checked: ' + candidates.join(', '));\n}\n\nfunction readJsonIfExists(filePath) {\n  try {\n    if (fs.existsSync(filePath)) {\n      return JSON.parse(fs.readFileSync(filePath, 'utf8'));\n    }\n  } catch (error) {}\n  return {};\n}\n\nconst root = projectRoot();\nconst prompts = readJsonIfExists(path.join(root, 'prompts', 'prompt_center.json'));\nif (!Object.keys(prompts).length) {\n  throw new Error('Prompt Library: 无法读取 prompts/prompt_center.json，请检查 TIKTOK_WORKFLOW_ROOT/PROJECT_ROOT 或项目目录位置');\n}\n\nconst legacy = readJsonIfExists(path.join(root, 'tiktok-workflow-prompts.json'));\nconst fallbackStoryboardGrid = {\n  cols: 3,\n  rows: 2,\n  panel_aspect: '9:16',\n  normalize_canvas_aspect: '27:32',\n  supported_panel_counts: [6],\n  supported_layouts: { '6': '3x2 => 27:32' },\n  crop_inset_ratio: 0.01,\n  output_mime_type: 'image/jpeg',\n  output_extension: 'jpg',\n  jpeg_quality: 90,\n  panel_output_width: 1080,\n  panel_output_height: 1920,\n  panel_order: 'row_major_left_to_right',\n};\nconst fallbackCreativeTaskTypeMapping = {\n  _meta: { version: 'runtime-fallback', description: '最小创作任务映射，完整配置优先来自 prompt_center.json' },\n  '种草': { video_type: 'local_voiceover', recommended_grid: '6_grid' },\n  '口播': { video_type: 'local_voiceover', recommended_grid: '6_grid' },\n  '开箱': { video_type: 'pure_display_or_light_voiceover', recommended_grid: '6_grid' },\n  '产品展示': { video_type: 'mixed', recommended_grid: '6_grid' },\n  '痛点前置': { video_type: 'local_voiceover', recommended_grid: '6_grid' },\n  '自由创作': { video_type: 'mixed', recommended_grid: '6_grid' },\n  '故事剧情带货': { video_type: 'story_drama', recommended_grid: '6_grid' },\n  '真实故事剧情': { video_type: 'story_drama', recommended_grid: '6_grid' },\n  '爆点故事剧情': { video_type: 'story_drama', recommended_grid: '6_grid' },\n};\n\nconst runtimePrompts = {\n  ...prompts,\n  storyboard_grid: prompts.storyboard_grid || legacy.storyboard_grid || fallbackStoryboardGrid,\n  creative_task_type_mapping: prompts.creative_task_type_mapping || legacy.creative_task_type_mapping || fallbackCreativeTaskTypeMapping,\n};\n\nreturn [{ json: { ...baseJson, ...runtimePrompts }, binary: baseBinary }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        -220
+      ],
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "name": "Prompt Library"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "73174eed-8d40-4ed7-9eee-ccbb6824be41",
+              "name": "selected_concept_index",
+              "value": "={{ Number($json.selected_concept_index ?? 0) }}",
+              "type": "number"
+            },
+            {
+              "id": "9e11a98b-2e83-41c0-8f57-152ffbead2e4",
+              "name": "selected_concept_name",
+              "value": "={{ $json.selected_concept_name || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -120,
+        80
+      ],
+      "id": "e841ec1c-24a4-4db0-813b-e219b3ac829c",
+      "name": "Edit Fields3"
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.item.json || {};\n\nconst rawConcepts = input.creative_concepts_json;\nif (!rawConcepts) {\n  throw new Error('creative_concepts_json 为空，无法提取选中方向');\n}\n\nlet concepts;\ntry {\n  concepts = JSON.parse(rawConcepts);\n} catch (error) {\n  throw new Error('creative_concepts_json 不是合法 JSON: ' + error.message);\n}\n\nif (!Array.isArray(concepts) || concepts.length === 0) {\n  throw new Error('creative_concepts_json 解析后不是有效数组');\n}\n\nconst selectedIndex = Number(input.selected_concept_index ?? 0);\nif (selectedIndex < 0 || selectedIndex >= concepts.length) {\n  throw new Error(`selected_concept_index 超出范围，当前值: ${selectedIndex}`);\n}\n\nconst selectedConcept = concepts[selectedIndex];\n\nreturn [\n  {\n    json: {\n      ...input,\n      project_id: input.project_id || '',\n      product_name: input.product_name || '',\n      target_market: input.target_market || '',\n      target_language: input.target_language || '',\n      creative_task_type: input.creative_task_type || '',\n      director_status: input.director_status || '',\n      product_understanding_json: input.product_understanding_json || '',\n      audience_persona_json: input.audience_persona_json || '',\n      tiktok_content_strategy_json: input.tiktok_content_strategy_json || '',\n      creative_concepts_json: input.creative_concepts_json || '',\n      selected_concept_index: selectedIndex,\n      selected_concept_name: input.selected_concept_name || selectedConcept.concept_name || '',\n      selected_concept_json: JSON.stringify(selectedConcept),\n      selected_concept: selectedConcept,\n      concept_count: input.concept_count || concepts.length,\n      created_at: input.created_at || ''\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        140,
+        80
+      ],
+      "id": "165476f3-3f6b-45a2-a06b-65c5b769718e",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        400,
+        240
+      ],
+      "id": "4c209034-0f91-4fe9-a4e6-bc0ae38d2036",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst item = $input.first();\nconst binary = item.binary || {};\nconst row = item.json || {};\n\nconst imagePaths = Array.isArray(row.product_image_local_paths) ? row.product_image_local_paths : [];\nconst metaImages = Array.isArray(row.product_images_meta) ? row.product_images_meta : [];\nconst image1Path = row.image_1_path || imagePaths[0] || metaImages[0]?.path || '';\nconst image2Path = row.image_2_path || imagePaths[1] || metaImages[1]?.path || '';\nconst imageCount = Number(row.product_image_count ?? row.image_count ?? imagePaths.length ?? metaImages.length ?? 0);\n\n// ── Guard: verify file existence before attempting to read ─────────────────\nif (imageCount > 0) {\n  const requiredPaths = [];\n  if (imageCount >= 1 && image1Path) requiredPaths.push(image1Path);\n  if (imageCount >= 2 && image2Path) requiredPaths.push(image2Path);\n  const missingPaths = requiredPaths.filter(p => !fs.existsSync(p));\n  if (missingPaths.length > 0) {\n    throw new Error(\n      '产品图片缓存文件不存在，无法组装脚本请求体。\\n' +\n      'project_id: ' + (row.project_id || '(unknown)') + '\\n' +\n      '缺失路径（共 ' + missingPaths.length + ' 个）：\\n' +\n      missingPaths.map(p => '  ' + p).join('\\n') + '\\n' +\n      '请重新从表单上传图片并重新生成创意方向，或将缺失图片手动复制到上述路径后重试。'\n    );\n  }\n}\n\nfunction readImageBase64(binaryKey, pathValue) {\n  if (pathValue && fs.existsSync(pathValue)) {\n    return fs.readFileSync(pathValue).toString('base64');\n  }\n  try {\n    return this.helpers.getBinaryDataBuffer(0, binaryKey).then((buf) => buf.toString('base64'));\n  } catch (error) {\n    return '';\n  }\n}\n\nconst image1Base64 = imageCount >= 1 ? await readImageBase64.call(this, 'product_images_0', image1Path) : '';\nconst image2Base64 = imageCount >= 2 ? await readImageBase64.call(this, 'product_images_1', image2Path) : '';\nconst mime1 = binary.product_images_0?.mimeType || row.image_1_mime || metaImages[0]?.mimeType || 'image/jpeg';\nconst mime2 = binary.product_images_1?.mimeType || row.image_2_mime || metaImages[1]?.mimeType || 'image/jpeg';\n\nfunction tpl(str, vars) {\n  let out = str;\n  for (const [k, v] of Object.entries(vars)) {\n    out = out.split('{{' + k + '}}').join(v == null ? '' : String(v));\n  }\n  return out;\n}\n\nconst prompts = $('Prompt Library').first().json;\nconst s = prompts.script;\n\n// P12-H1b-A: safe automatic retry augmentation (additive; no contract change).\n// Active ONLY when serve sets row.script_safe_retry on the single permitted retry.\nconst _scriptSafeRetry = Boolean(row.script_safe_retry);\nconst _safeRetryInstruction = (_scriptSafeRetry && s.safe_retry_instruction) ? String(s.safe_retry_instruction) : '';\nconst _prevError = String(row.previous_error || '').slice(0, 1500);\nconst _prevFailureType = String(row.previous_failure_type || '');\n\nconst userText = tpl(s.user_template, {\n  project_id: row.project_id,\n  product_name: row.product_name,\n  target_market: row.target_market,\n  target_language: row.target_language,\n  creative_task_type: row.creative_task_type,\n  product_understanding_json: row.product_understanding_json || '',\n  audience_persona_json: row.audience_persona_json || '',\n  tiktok_content_strategy_json: row.tiktok_content_strategy_json || '',\n  selected_concept_name: row.selected_concept_name,\n  selected_concept_json: row.selected_concept_json || '',\n});\n\nconst overrideConstraints = [];\nif (row.visual_expression || row.content_style) overrideConstraints.push('- content_style（内容风格，硬约束）：' + (row.visual_expression || row.content_style));\nif (row.model_profile) overrideConstraints.push('- model_profile（人物/模特设定，硬约束）：' + row.model_profile);\nif (row.usage_scene) overrideConstraints.push('- usage_scene（使用场景，硬约束）：' + row.usage_scene);\nif (row.target_user) overrideConstraints.push('- target_user（目标用户，硬约束）：' + row.target_user);\nconst hardConstraintBlock = [\n  '',\n  '【Form 业务硬约束】',\n  '- target_market 必须严格使用：' + (row.target_market || ''),\n  '- target_language（视频字幕/口播/台词的目标语言，不是 JSON 字段的输出语言）：' + (row.target_language || ''),\n  '- 【输出语言强制要求】所有 JSON 审核字段（concept_name、core_selling_angle、target_user、pain_point、usage_scene、visual_expression 等）必须使用中文，禁止用 target_language 作为 JSON 字段的输出语言。',\n  '- creative_task_type 必须严格使用：' + (row.creative_task_type || ''),\n  '- creative_task_type_rules：' + (row.creative_task_type_rules_json || '{}'),\n  '- selected_concept 是人工选择后的硬约束，不允许推翻。',\n  '- product_image_count：' + imageCount,\n  ...overrideConstraints,\n  ...(_scriptSafeRetry ? [\n    '',\n    '【安全自动重试上下文（系统注入，最多 1 次）】',\n    '- previous_failure_type：' + (_prevFailureType || 'policy_or_parse'),\n    '- previous_error（上次失败原因摘要，仅供规避，不得复述给用户）：' + (_prevError || '(未提供)'),\n    '- 本次为安全重试：请严格输出合法 JSON 且仅 6 个 shot，避免触发内容政策；不得更改已选创意方向、target_market、target_language、creative_task_type。',\n  ] : []),\n].join('\\n');\n\nconst _vlSource = (typeof row !== 'undefined' && row) ? row : (item.json || {});\nconst _vlMarket = String(_vlSource.target_market || '').trim();\nconst _vlLanguage = String(_vlSource.target_language || '').trim();\nconst _vlRules = prompts.voice_localization || {};\nconst _vlMarketKey = _vlMarket.toUpperCase();\nconst _vlRule = _vlRules[_vlMarketKey] || _vlRules[_vlMarket] || _vlRules.default || {};\nconst _vlAvoid = Array.from(new Set([\n  ...(_vlRule.avoid || []),\n  'robotic AI narration',\n  'ad-like promotional tone',\n  'machine-translation tone',\n  'formal broadcaster speech',\n].map((v) => String(v || '').trim()).filter(Boolean)));\nconst _vlOpenings = Array.isArray(_vlRule.opening_patterns) && _vlRule.opening_patterns.length\n  ? _vlRule.opening_patterns.join(' / ')\n  : '';\nconst voiceLocalizationBlock = [\n  '',\n  '【Target Market Voice Localization】',\n  '- This rule layer only guides the AI first draft. If the user manually edits optional_voiceover_local later, the user edit has highest priority.',\n  '- target_market: ' + (_vlMarket || 'not specified'),\n  '- target_language: ' + (_vlLanguage || 'not specified'),\n  '- optional_voiceover_local must follow target_market and target_language exactly.',\n  '- Write optional_voiceover_local as natural local creator speech: conversational rhythm, short spoken phrases, clear emotion, believable pauses, and words that can be spoken within 8 seconds.',\n  '- Tone: ' + (_vlRule.tone || 'natural, conversational, authentic local creator sharing'),\n  _vlOpenings ? '- Local opening patterns to reference: ' + _vlOpenings : '',\n  '- Avoid: ' + _vlAvoid.join('; '),\n  '- Avoid robotic AI narration / ad-like voice / machine-translation tone. Do not write subtitles, captions, watermarks, or on-screen text instructions inside optional_voiceover_local.',\n].filter(Boolean).join('\\n');\n\nconst parts = [{ text: userText + hardConstraintBlock + voiceLocalizationBlock }];\nif (imageCount >= 1 && image1Base64) parts.push({ inline_data: { mime_type: mime1, data: image1Base64 } });\nif (imageCount >= 2 && image2Base64) parts.push({ inline_data: { mime_type: mime2, data: image2Base64 } });\n\nreturn [\n  {\n    json: {\n      ...row,\n      image_1_path: image1Path,\n      image_2_path: image2Path,\n      image_1_base64: image1Base64,\n      image_2_base64: image2Base64,\n      image_1_mime: mime1,\n      image_2_mime: mime2,\n      image_count: imageCount,\n      product_image_count: imageCount,\n      request_body: {\n        system_instruction: { parts: [{ text: s.system_instruction + (_safeRetryInstruction ? ('\\n\\n' + _safeRetryInstruction) : '') }] },\n        contents: [{ role: 'user', parts }],\n        generationConfig: s.generation_config,\n      },\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        240
+      ],
+      "id": "9c1d4d5b-1a7d-48be-bf36-b741da62d4ca",
+      "name": "脚本请求体组装"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json._api_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json._auth_header }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.request_body }}",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        920,
+        240
+      ],
+      "id": "596f3ebb-0678-46a5-851f-726ba068794e",
+      "name": "脚本框架生成",
+      "retryOnFail": true,
+      "maxTries": 4,
+      "waitBetweenTries": 15000,
+      "notes": "gemini_text_helper_proxy_v1: 文本 Gemini 调用走本地 helper/代理，避免地区限制和直接 HTTP 400。\ngemini_text_helper_proxy_v1: 文本 Gemini 调用走本地 helper/代理，避免地区限制和直接 HTTP 400。"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Response adapter + extractor for Kie/OpenAI and Gemini native responses\nconst input = $json || {};\n\nfunction parseMaybe(value) {\n  if (typeof value === 'string') {\n    try { return JSON.parse(value); } catch (_) { return value; }\n  }\n  return value;\n}\n\n// n8n HTTP Request may wrap response in { data: \"...json string...\" }\nlet payload = parseMaybe(input.data != null ? input.data : input);\nif (payload && typeof payload === 'object' && payload.data != null && !payload.choices && !payload.candidates) {\n  payload = parseMaybe(payload.data);\n}\n\n// Error detection for Kie API errors\nif (payload && typeof payload === 'object' && !payload.candidates && !payload.choices) {\n  const errCode = payload.code;\n  const errMsg  = payload.msg || payload.message;\n  if (errCode !== undefined && errMsg) {\n    const hint =\n      String(errCode) === '422' ? '请求格式错误' :\n      String(errCode) === '401' ? 'API Key 无效' :\n      String(errCode) === '403' ? '账户权限不足或余额不足' :\n      String(errCode) === '429' ? '请求频率超限' : '';\n    throw new Error('Kie API 错误 ' + errCode + ': ' + errMsg + (hint ? '（' + hint + '）' : ''));\n  }\n}\n\nconst raw = (payload.candidates && payload.candidates[0] && payload.candidates[0].content && payload.candidates[0].content.parts && payload.candidates[0].content.parts[0])\n  ? payload.candidates[0].content.parts[0].text || ''\n  : (payload.choices && payload.choices[0] && payload.choices[0].message)\n    ? payload.choices[0].message.content || ''\n    : '';\n\nif (!raw) {\n  throw new Error('脚本框架生成返回空内容：' + JSON.stringify(payload).slice(0, 300));\n}\n\nfunction extractFirstJsonValue(text) {\n  const raw = String(text || '').trim();\n  if (!raw) throw new Error('脚本框架响应文本为空，无法提取 JSON');\n\n  const tick = String.fromCharCode(96);\n  const fence = tick + tick + tick;\n  const fencedJson = new RegExp(fence + 'json\\\\s*([\\\\s\\\\S]*?)\\\\s*' + fence, 'i');\n  const fencedAny = new RegExp(fence + '\\\\s*([\\\\s\\\\S]*?)\\\\s*' + fence, 'i');\n  const fenced = raw.match(fencedJson) || raw.match(fencedAny);\n  const source = fenced?.[1] ? fenced[1].trim() : raw;\n\n  for (const start of [source.indexOf('{'), source.indexOf('[')].filter((x) => x >= 0).sort((a, b) => a - b)) {\n    const open = source[start];\n    const close = open === '{' ? '}' : ']';\n    let depth = 0;\n    let inString = false;\n    let escape = false;\n    for (let i = start; i < source.length; i++) {\n      const ch = source[i];\n      if (inString) {\n        if (escape) {\n          escape = false;\n        } else if (ch === '\\\\') {\n          escape = true;\n        } else if (ch === '\"') {\n          inString = false;\n        }\n        continue;\n      }\n      if (ch === '\"') {\n        inString = true;\n      } else if (ch === open) {\n        depth++;\n      } else if (ch === close) {\n        depth--;\n        if (depth === 0) return source.slice(start, i + 1).trim();\n      }\n    }\n  }\n\n  return source;\n}\n\nlet parsed = {};\ntry {\n  parsed = JSON.parse(extractFirstJsonValue(raw));\n} catch (error) {\n  throw new Error('脚本框架生成返回无法提取合法 JSON: ' + error.message + '，原始返回前800字=' + String(raw).slice(0, 800));\n}\n\n// 尽量从上游节点取基础信息\nconst source =\n  $('Code in JavaScript').first()?.json ||\n  $('Edit Fields3').first()?.json ||\n  $('脚本请求体组装').first()?.json ||\n  {};\n\n\n// Validate shots count: must be exactly 6\nif (!Array.isArray(parsed.shots) || parsed.shots.length === 0) {\n  throw new Error('脚本框架生成结果中 shots 为空数组。完整解析结果（前500字）：' + JSON.stringify(parsed).slice(0, 500));\n}\nif (parsed.shots.length !== 6) {\n  throw new Error('脚本框架生成结果中 shots 数量不是 6 而是 ' + parsed.shots.length + '，不符合 6 镜头分镜要求。完整结果（前500字）：' + JSON.stringify(parsed).slice(0, 500));\n}\n\nreturn [\n  {\n    json: {\n      project_id: source.project_id || '',\n      product_name: source.product_name || '',\n      target_market: source.target_market || '',\n      target_language: source.target_language || '',\n      creative_task_type: source.creative_task_type || '',\n\n      selected_concept_name_original: parsed.script_overview?.selected_concept_name_original || '',\n      script_concept_label: parsed.script_overview?.script_concept_label || '',\n      script_goal: parsed.script_overview?.script_goal || '',\n      visual_style: parsed.script_overview?.visual_style || '',\n      identified_product_type: parsed.script_overview?.identified_product_type || '',\n      product_presentation_logic: parsed.script_overview?.product_presentation_logic || '',\n      core_visual_focus: parsed.script_overview?.core_visual_focus || '',\n      total_shots: parsed.script_overview?.total_shots || 0,\n      hook_strategy: parsed.script_overview?.hook_strategy || '',\n\n      full_script_json: JSON.stringify(parsed),\n      created_at: new Date().toISOString(),\n\n      shots: parsed.shots || []\n    }\n  }\n];",
+        "mode": "runOnceForAllItems",
+        "language": "javaScript"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        240
+      ],
+      "id": "eaa4a8e1-46d0-42ed-a965-0d9242b6a4f1",
+      "name": "提取脚本框架JSON",
+      "notes": "robust_llm_json_extract_v1: 宽容提取模型返回里的第一段合法 JSON。"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst os = require('os');\nconst process = require('process');\n\nconst row = $input.first().json || {};\nconst projectId = String(row.project_id || '').trim();\nif (!projectId) throw new Error('写脚本框架上下文：缺少 project_id');\n// Guard: refuse to write if shots are invalid\nconst inputShots = row.shots || [];\nif (!Array.isArray(inputShots) || inputShots.length !== 6) {\n  throw new Error('写脚本框架上下文：shots 数量不合法（期望 6，实际 ' + inputShots.length + '），拒绝写入脚本上下文和更新 project-state。');\n}\n\n\n\nfunction projectRoot() {\n  const env = require('process').env || {};\n  return env.TIKTOK_WORKFLOW_ROOT || env.PROJECT_ROOT || process.cwd();\n}\n\nconst root = projectRoot();\nconst dataRoot = require('process').env.WORKFLOW_DATA_ROOT || path.join(os.homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data') || require('process').env.AI_VIDEO_RUNTIME_ROOT || root;\nconst scriptContextDir = path.join(dataRoot, '.n8n-local-cache', 'script-context');\nfs.mkdirSync(scriptContextDir, { recursive: true });\n\n// Pull full concept context (image paths, concept data) from concept_select_restore\nconst ctx = $('concept_select_restore').first()?.json || {};\n\n// Update project-state: stage = script_generated\nconst projectStateDir = path.join(dataRoot, '.n8n-local-cache', 'project-state');\nfs.mkdirSync(projectStateDir, { recursive: true });\nconst projectStatePath = path.join(projectStateDir, 'project_' + projectId.replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json');\nlet projectState = {};\ntry { if (fs.existsSync(projectStatePath)) projectState = JSON.parse(fs.readFileSync(projectStatePath, 'utf8')); } catch (e) {}\nprojectState.stage = 'script_generated';\nprojectState.status = 'script_generated';\nprojectState.updated_at = new Date().toISOString();\nprojectState.project_id = projectId;\nfs.writeFileSync(projectStatePath, JSON.stringify(projectState, null, 2));\n\n// Write script_context.json — all data WF02B needs\nconst imagePaths = ctx.product_image_local_paths || [];\nconst scriptContext = {\n  project_id: projectId,\n  product_name:         row.product_name         || ctx.product_name         || '',\n  target_market:        row.target_market        || ctx.target_market        || '',\n  target_language:      row.target_language      || ctx.target_language      || '',\n  creative_task_type:   row.creative_task_type   || ctx.creative_task_type   || '',\n  creative_task_type_rules_json: ctx.creative_task_type_rules_json || '',\n  recommended_grid:     ctx.recommended_grid     || '6_grid',\n  selected_concept_id:  row.selected_concept_id  || ctx.selected_concept_id  || '',\n  selected_concept_name: row.selected_concept_name_original || row.selected_concept_name || ctx.selected_concept_name || '',\n  concept_context_path: row.concept_context_path || ctx.concept_context_path || '',\n  product_image_local_paths: imagePaths,\n  product_images_meta:  ctx.product_images_meta  || [],\n  product_image_count:  Math.max(Number(ctx.product_image_count || ctx.image_count || 0), imagePaths.length, Array.isArray(ctx.product_images_meta) ? ctx.product_images_meta.length : 0),\n  image_1_path: ctx.image_1_path || imagePaths[0] || '',\n  image_2_path: ctx.image_2_path || imagePaths[1] || '',\n  image_1_mime: ctx.image_1_mime || '',\n  image_2_mime: ctx.image_2_mime || '',\n  product_understanding_json:   ctx.product_understanding_json   || '',\n  audience_persona_json:        ctx.audience_persona_json        || '',\n  tiktok_content_strategy_json: ctx.tiktok_content_strategy_json || '',\n  creative_concepts_json:       ctx.creative_concepts_json       || '',\n  shots:               row.shots        || [],\n  full_script_json:    row.full_script_json    || '',\n  selected_concept_name_original: row.selected_concept_name_original || '',\n  script_concept_label:  row.script_concept_label  || '',\n  script_goal:           row.script_goal           || '',\n  visual_style:          row.visual_style           || '',\n  identified_product_type:     row.identified_product_type     || '',\n  product_presentation_logic:  row.product_presentation_logic  || '',\n  core_visual_focus:     row.core_visual_focus      || '',\n  total_shots:           row.total_shots            || 0,\n  hook_strategy:         row.hook_strategy          || '',\n  target_user:           ctx.target_user            || row.target_user           || '',\n  usage_scene:           ctx.usage_scene            || row.usage_scene           || '',\n  visual_expression:     ctx.visual_expression      || row.visual_expression     || '',\n  model_profile:         ctx.model_profile          || row.model_profile         || '',\n  core_selling_angle:    ctx.core_selling_angle      || row.core_selling_angle    || '',\n  why_it_fits_tiktok:    ctx.why_it_fits_tiktok      || row.why_it_fits_tiktok    || '',\n  review_round: Number(row.review_round || ctx.review_round || 1),\n  created_at:         ctx.created_at || new Date().toISOString(),\n  script_generated_at: new Date().toISOString(),\n};\n\nconst fileName = 'script_context_' + projectId.replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json';\nconst filePath = path.join(scriptContextDir, fileName);\nfs.writeFileSync(filePath, JSON.stringify(scriptContext, null, 2));\n\nlet _wsHost = '';\ntry { const _c = JSON.parse(require('fs').readFileSync(require('path').join(root, '版本测试', 'config', 'local-config.json'), 'utf8')); _wsHost = (_c.services && _c.services.workspace_host) || _wsHost; } catch(_e) {}\nconst scriptReviewUrl = _wsHost + '/script-review?project_id=' + encodeURIComponent(projectId);\n\nreturn [{\n  json: {\n    project_id: projectId,\n    script_context_path: filePath,\n    script_context_file: fileName,\n    script_review_url: scriptReviewUrl,\n    stage: 'script_generated',\n    shots_count: (row.shots || []).length,\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        240
+      ],
+      "id": "wf02a-write-script-context-node-v1",
+      "name": "写脚本框架上下文"
+    },
+    {
+      "parameters": {
+        "content": "## WF02A — 创意确认 → 脚本框架\n\n创意方向选定后调用此 Webhook，生成脚本框架并写入 script_context.json，然后停止等待人工审核脚本。",
+        "height": 120,
+        "width": 860,
+        "color": 4
+      },
+      "id": "wf02a-sticky-entry",
+      "name": "阶段说明｜WF02A入口",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -940,
+        -350
+      ]
+    },
+    {
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "uvar-applied",
+              "name": "user_vars_applied",
+              "value": "={{ !!($json.target_user || $json.model_profile || $json.usage_scene || $json.visual_expression || $json.hook_strategy || $json.core_selling_angle) }}",
+              "type": "boolean"
+            },
+            {
+              "id": "uvar-target-user",
+              "name": "user_var_target_user",
+              "value": "={{ $json.target_user }}",
+              "type": "string"
+            },
+            {
+              "id": "uvar-model-profile",
+              "name": "user_var_model_profile",
+              "value": "={{ $json.model_profile }}",
+              "type": "string"
+            },
+            {
+              "id": "uvar-usage-scene",
+              "name": "user_var_usage_scene",
+              "value": "={{ $json.usage_scene }}",
+              "type": "string"
+            },
+            {
+              "id": "uvar-visual-expr",
+              "name": "user_var_visual_expression",
+              "value": "={{ $json.visual_expression }}",
+              "type": "string"
+            },
+            {
+              "id": "uvar-hook",
+              "name": "user_var_hook_strategy",
+              "value": "={{ $json.hook_strategy }}",
+              "type": "string"
+            },
+            {
+              "id": "uvar-angle",
+              "name": "user_var_core_selling_angle",
+              "value": "={{ $json.core_selling_angle }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -120,
+        -80
+      ],
+      "id": "set-varmap-uvar-001",
+      "name": "Set: 变量显式化"
+    },
+    {
+      "id": "c0dc4e69-26c8-41b9-96f6-1666cf8f44f8",
+      "name": "读取脚本API配置",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        790,
+        240
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const process = require('process');\nconst fs = require('fs'), path = require('path'), os = require('os');\n\nconst KIE_BASE = 'https://api.kie.ai/api';\nconst KIE_TEXT_MODEL_DEFAULT = 'gemini-3.1-pro';\n\nconst CONFIG_CANDIDATES = [\n  process.env.AI_VIDEO_CONFIG_PATH,\n  path.join(os.homedir(), 'Library', 'Application Support', 'AI Video', 'config', 'local-config.json'),\n  process.env.TIKTOK_WORKFLOW_ROOT ? path.join(process.env.TIKTOK_WORKFLOW_ROOT, '版本测试', 'config', 'local-config.json') : null,\n].filter(Boolean);\n\nfunction loadConfigs() {\n  const results = [];\n  for (const p of CONFIG_CANDIDATES) {\n    try { results.push({ path: p, cfg: JSON.parse(fs.readFileSync(p, 'utf8')) }); } catch(_) {}\n  }\n  return results;\n}\n\nfunction readKieConfig(taskStage) {\n  for (const { cfg } of loadConfigs()) {\n    const key = String(\n      (cfg.providers && cfg.providers.kie && cfg.providers.kie.api_key) ||\n      (cfg.kie && cfg.kie.api_key) ||\n      ''\n    ).trim();\n    if (!key) continue;\n    const taskModel = String((cfg.tasks && cfg.tasks[taskStage] && cfg.tasks[taskStage].model) || '').trim();\n    const providerModel = String(\n      (cfg.providers && cfg.providers.kie && cfg.providers.kie.text_model) ||\n      (cfg.kie && cfg.kie.text_model) ||\n      ''\n    ).trim();\n    const model = taskModel || providerModel || KIE_TEXT_MODEL_DEFAULT;\n    const baseUrl = String(\n      (cfg.providers && cfg.providers.kie && cfg.providers.kie.base_url) ||\n      (cfg.kie && cfg.kie.base_url) ||\n      KIE_BASE\n    ).replace(/\\/+$/, '');\n    return { key, model, baseUrl };\n  }\n  const envKey = String(process.env.KIE_API_KEY || '').trim();\n  if (envKey) return { key: envKey, model: KIE_TEXT_MODEL_DEFAULT, baseUrl: KIE_BASE };\n  throw new Error('缺少 Kie API Key。请在「系统配置」填写 Kie API Key 并保存。');\n}\n\nfunction kieTextUrl(model, baseUrl) {\n  const origin = baseUrl.endsWith('/api') ? baseUrl.slice(0, -4) : baseUrl.replace(/\\/+$/, '');\n  return origin + '/' + model + '/v1/chat/completions';\n}\n\nconst { key, model, baseUrl } = readKieConfig('script_framework');\nconst url = kieTextUrl(model, baseUrl);\nconsole.log('[WF02A-脚本框架] Kie text | model:', model);\n\nconst rawBody = $json.request_body || {};\nconst sysText = (rawBody.system_instruction && rawBody.system_instruction.parts && rawBody.system_instruction.parts[0] && rawBody.system_instruction.parts[0].text) || '';\nconst userParts = (rawBody.contents && rawBody.contents[0] && rawBody.contents[0].parts) || [];\nconst messages = [];\nif (sysText) messages.push({ role: 'system', content: sysText });\nconst userContent = [];\nfor (const part of userParts) {\n  if (part.text) userContent.push({ type: 'text', text: part.text });\n}\nconst userMsg = userContent.length === 1 && userContent[0].type === 'text'\n  ? { role: 'user', content: userContent[0].text }\n  : { role: 'user', content: userContent };\nmessages.push(userMsg);\nconst kieBody = { model: model, messages, tool_choice: 'none' };\n\nreturn [{ json: { ...$json, _stage: 'script_framework', _adapter: 'kie_openai_chat', _api_key: key, _model: model, _api_url: url, _auth_header: `Bearer ${key}`, request_body: kieBody } }];\n"
+      }
+    }
+  ],
+  "connections": {
+    "concept_select_resume": {
+      "main": [
+        [
+          {
+            "node": "concept_select_normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "concept_select_normalize": {
+      "main": [
+        [
+          {
+            "node": "concept_select_restore",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "concept_select_restore": {
+      "main": [
+        [
+          {
+            "node": "Set: 变量显式化",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prompt Library": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields3": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "脚本请求体组装",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "脚本请求体组装": {
+      "main": [
+        [
+          {
+            "node": "读取脚本API配置",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "脚本框架生成": {
+      "main": [
+        [
+          {
+            "node": "提取脚本框架JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "提取脚本框架JSON": {
+      "main": [
+        [
+          {
+            "node": "写脚本框架上下文",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set: 变量显式化": {
+      "main": [
+        [
+          {
+            "node": "Prompt Library",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "读取脚本API配置": {
+      "main": [
+        [
+          {
+            "node": "脚本框架生成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "pinData": {},
+  "versionId": "bc771be5-a1b0-4c0d-9615-a3f8f912b139",
+  "meta": {
+    "source_workflow": "conceptSelectStoryboardV1",
+    "split_part": "WF02A",
+    "review_hub_url": "http://127.0.0.1:18788/reviews"
+  },
+  "tags": []
+}

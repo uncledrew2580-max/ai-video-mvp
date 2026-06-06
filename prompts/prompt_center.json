@@ -1,0 +1,756 @@
+{
+  "_comment": "提示词中心 — 可在 18788 工作台直接编辑并保存。恢复默认请用 prompt_center.example.json。",
+  "_version": "1.1.0",
+  "_migration_note": "后续计划：n8n workflow 中 Prompt Library 节点将直接读取本文件，当前为 UI 编辑层，需后续同步 sync 进 workflow。",
+  "gemini_models": {
+    "text_pro": "gemini-3-flash-preview",
+    "image_flash": "gemini-3.1-flash-image-preview"
+  },
+  "creative_task_type_mapping": {
+    "种草": {
+      "video_type": "local_voiceover",
+      "style": "local TikTok creator product recommendation",
+      "script_focus": [
+        "hook",
+        "ugc",
+        "user insight",
+        "product benefit",
+        "trust building",
+        "soft conversion",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": true,
+      "recommended_grid": "6_grid"
+    },
+    "口播": {
+      "video_type": "local_voiceover",
+      "style": "direct-to-camera product introduction",
+      "script_focus": [
+        "hook",
+        "pain point",
+        "product intro",
+        "benefit proof",
+        "call to action",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": true,
+      "recommended_grid": "6_grid"
+    },
+    "开箱": {
+      "video_type": "pure_display_or_light_voiceover",
+      "style": "real unboxing showcase",
+      "script_focus": [
+        "package",
+        "opening action",
+        "first impression",
+        "product reveal",
+        "detail display",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": false,
+      "recommended_grid": "6_grid"
+    },
+    "产品展示": {
+      "video_type": "mixed",
+      "style": "product benefit demonstration",
+      "script_focus": [
+        "core selling points",
+        "usage demo",
+        "detail proof",
+        "result scene",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": false,
+      "recommended_grid": "6_grid"
+    },
+    "痛点前置": {
+      "video_type": "local_voiceover",
+      "style": "pain-point-led conversion story",
+      "script_focus": [
+        "pain point hook",
+        "problem agitation",
+        "solution reveal",
+        "product proof",
+        "conversion",
+        "first 1-2 seconds must show a visible pain, risk, inconvenience, or strong result expectation",
+        "quickly reveal the product as the solution; no slow setup or soft opening",
+        "show proof/result before soft conversion",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": true,
+      "visual_focus": [
+        "pain point scene — real-life unsafe or frustrating situation visible in first frame; product NOT present yet",
+        "product reveal as natural solution in shot_2 — never a hard ad intro",
+        "one clear product feature demonstration per shot — single focused action only",
+        "before-state and after-state in separate shots — never split-screen or side-by-side within one clip",
+        "creator face or hands as relatable proxy for target audience"
+      ],
+      "avoid": [
+        "complex multi-step or simultaneous actions in a single shot — high穿模 risk",
+        "climbing, falling, or large unstable body movements — high Veo generation failure risk",
+        "fast camera cuts or zoom within a single clip",
+        "multiple people interacting in the same shot",
+        "product appearing in shot_1 before pain point is established",
+        "theatrical or exaggerated emotional reactions — keep natural and restrained",
+        "generic product showcase without pain point context or narrative logic",
+        "before/after split-screen or dual-image composition within one panel"
+      ],
+      "script_structure": {
+        "shot_1": "Hook — pain point scene: specific real-life unsafe or inconvenient situation; product NOT visible yet; single action, strong visual tension",
+        "shot_2": "Solution reveal — product enters naturally as the answer to the pain; one clear reveal action",
+        "shot_3": "Core feature demo — one key product function demonstrated in a single slow clear action; product fully visible",
+        "shot_4": "Secondary feature or use-case expansion — extend credibility with a different angle or additional function",
+        "shot_5": "Proof shot — functional result or near-static effect demonstration (e.g. static absorption, before/after in separate shot); minimal motion",
+        "shot_6": "Soft CTA — creator endorsement with product clearly visible, natural warm close, light call to action"
+      },
+      "recommended_grid": "6_grid"
+    },
+    "自由创作": {
+      "video_type": "mixed",
+      "style": "model-selected best-fit strategy",
+      "script_focus": [
+        "product analysis",
+        "best-fit type",
+        "hook",
+        "ugc",
+        "conversion",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": "optional",
+      "recommended_grid": "6_grid"
+    },
+    "故事剧情带货": {
+      "video_type": "story_drama",
+      "style": "TikTok UGC short drama — real-life micro-awkward moments, small misunderstandings, subtle contrast; one simple action per shot; natural product placement; no theatrical exaggeration",
+      "script_focus": [
+        "【前0-3秒 Drama Hook — 真实生活小尴尬/小误会开场】画面第一秒必须有一个具体可见的小尴尬、小误会或小痛点：包包太小装不下、开拉链卡住、东西散落一地、找不到钥匙、小摩擦等真实日常。不要平铺直叙，不要温和开场，但也不要戏剧化夸张表演。冲突必须与产品核心卖点相关。保持真实生活 UGC 感——是路人真实事件，不是网红剧情片。前3秒内不出产品实物，产品在 shot_3 以剧情道具方式自然登场。",
+        "【中段 Problem Build-up】痛点或困扰持续存在：微压力/微尴尬升级，人物反应自然真实，不做夸张表情和肢体动作，每个镜头只有一个简单动作",
+        "【产品进入 Product Turn】产品作为剧情转折关键道具自然登场（解决小困扰/带来小惊喜），绝不硬广植入",
+        "【高潮 Key Moment】展示产品使用/关键转折/效果呈现，情绪从轻微不适转向满意或惊喜，保持真实克制",
+        "【结尾 Payoff + Soft CTA】日常问题被轻松解决的满足感/小反转 + 轻 CTA（真实推荐，不要硬销售）",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": true,
+      "visual_focus": [
+        "自然情绪特写 — 微尴尬/微惊喜/轻松满足的真实表情（无夸张颜艺）",
+        "日常生活小反差场景 — 具体可见的小痛点 vs 解决后的满意状态",
+        "产品作为情节道具的自然入镜",
+        "UGC 手持真实感 — 真实场景，不要过度制作",
+        "每个镜头一个主体动作 — 低穿模风险，简单清晰"
+      ],
+      "avoid": [
+        "夸张颜艺/大幅肢体动作（过度夸张的面部表情、失控奔跑/摔倒/哭喊）",
+        "影视剧表演感（不要演技化、走秀式或戏剧化镜头语言）",
+        "复杂多人互动场景（每个镜头只有一个主体角色和一个简单动作）",
+        "单镜头内连续多个动作或快速切换（高穿模风险）",
+        "平淡生活流开场（slow, mundane, no hook）",
+        "功能参数罗列（feature list enumeration）",
+        "品牌广告腔（brand commercial tone / polished spokesperson）",
+        "前5秒硬 CTA 或直接安利产品",
+        "故事逻辑牵强 — 产品进入场景不自然",
+        "前3秒内出现产品实物（product must not appear before shot_3）",
+        "在同一 shot/panel 内拼接 before/after 对比图（必须拆为两个独立 shot 顺序表达）",
+        "冲突/痛点与产品卖点无关的戏剧化场景（drama must connect to the product pain point）"
+      ],
+      "script_structure": {
+        "shot_1": "真实生活小尴尬/小误会 Hook — 一个具体场景和动作，前3秒抓住注意力（不要夸张失控，不要大幅肢体动作）",
+        "shot_2": "痛点/困扰持续显现 — 微压力/微困扰，人物自然反应，单一简单动作，无戏剧化爆发",
+        "shot_3": "产品自然进入剧情 — 作为解决小困扰/带来小惊喜的关键道具，绝不是硬广",
+        "shot_4": "关键使用过程 — 产品使用中的一个动作，效果开始显现，简单清晰",
+        "shot_5": "结果呈现 — 问题解决后的满意/轻松状态，真实克制的情绪反应",
+        "shot_6": "轻 CTA/真实推荐/评论区互动 — 自然收尾，不硬销售"
+      },
+      "recommended_grid": "6_grid"
+    },
+    "真实故事剧情": {
+      "video_type": "story_drama",
+      "style": "TikTok UGC short drama — real-life micro-awkward moments, small misunderstandings, subtle contrast; one simple action per shot; natural product placement; no theatrical exaggeration",
+      "script_focus": [
+        "【前0-3秒 Drama Hook — 真实生活小尴尬/小误会开场】画面第一秒必须有一个具体可见的小尴尬、小误会或小痛点：包包太小装不下、开拉链卡住、东西散落一地、找不到钥匙、小摩擦等真实日常。不要平铺直叙，不要温和开场，但也不要戏剧化夸张表演。冲突必须与产品核心卖点相关。保持真实生活 UGC 感——是路人真实事件，不是网红剧情片。前3秒内不出产品实物，产品在 shot_3 以剧情道具方式自然登场。",
+        "【中段 Problem Build-up】痛点或困扰持续存在：微压力/微尴尬升级，人物反应自然真实，不做夸张表情和肢体动作，每个镜头只有一个简单动作",
+        "【产品进入 Product Turn】产品作为剧情转折关键道具自然登场（解决小困扰/带来小惊喜），绝不硬广植入",
+        "【高潮 Key Moment】展示产品使用/关键转折/效果呈现，情绪从轻微不适转向满意或惊喜，保持真实克制",
+        "【结尾 Payoff + Soft CTA】日常问题被轻松解决的满足感/小反转 + 轻 CTA（真实推荐，不要硬销售）",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": true,
+      "visual_focus": [
+        "自然情绪特写 — 微尴尬/微惊喜/轻松满足的真实表情（无夸张颜艺）",
+        "日常生活小反差场景 — 具体可见的小痛点 vs 解决后的满意状态",
+        "产品作为情节道具的自然入镜",
+        "UGC 手持真实感 — 真实场景，不要过度制作",
+        "每个镜头一个主体动作 — 低穿模风险，简单清晰"
+      ],
+      "avoid": [
+        "夸张颜艺/大幅肢体动作（过度夸张的面部表情、失控奔跑/摔倒/哭喊）",
+        "影视剧表演感（不要演技化、走秀式或戏剧化镜头语言）",
+        "复杂多人互动场景（每个镜头只有一个主体角色和一个简单动作）",
+        "单镜头内连续多个动作或快速切换（高穿模风险）",
+        "平淡生活流开场（slow, mundane, no hook）",
+        "功能参数罗列（feature list enumeration）",
+        "品牌广告腔（brand commercial tone / polished spokesperson）",
+        "前5秒硬 CTA 或直接安利产品",
+        "故事逻辑牵强 — 产品进入场景不自然",
+        "前3秒内出现产品实物（product must not appear before shot_3）",
+        "在同一 shot/panel 内拼接 before/after 对比图（必须拆为两个独立 shot 顺序表达）",
+        "冲突/痛点与产品卖点无关的戏剧化场景（drama must connect to the product pain point）"
+      ],
+      "script_structure": {
+        "shot_1": "真实生活小尴尬/小误会 Hook — 一个具体场景和动作，前3秒抓住注意力（不要夸张失控，不要大幅肢体动作）",
+        "shot_2": "痛点/困扰持续显现 — 微压力/微困扰，人物自然反应，单一简单动作，无戏剧化爆发",
+        "shot_3": "产品自然进入剧情 — 作为解决小困扰/带来小惊喜的关键道具，绝不是硬广",
+        "shot_4": "关键使用过程 — 产品使用中的一个动作，效果开始显现，简单清晰",
+        "shot_5": "结果呈现 — 问题解决后的满意/轻松状态，真实克制的情绪反应",
+        "shot_6": "轻 CTA/真实推荐/评论区互动 — 自然收尾，不硬销售"
+      },
+      "recommended_grid": "6_grid"
+    },
+    "爆点故事剧情": {
+      "video_type": "story_drama",
+      "style": "TikTok UGC short drama — high-impact social embarrassment, extreme emotion close-ups, strong dramatic reversal; one simple action per shot; product as key plot device; UGC authenticity preserved",
+      "script_focus": [
+        "【前0-3秒 Drama Hook — 极致冲突开场】画面第一秒必须有强冲突/强反差/尴尬社死瞬间：被当众嘲笑/公开失败/身份反差/突然爆发的小窘境。冲突必须与产品核心卖点强相关，不能为戏剧化乱编无关场景。前3秒内不出产品实物，产品在 shot_3 以剧情转折道具方式自然登场。保持 UGC 手持感——是路人真实事件，不是网红表演。",
+        "【中段 Conflict Escalation】问题持续升级：人物误会/社交压力/情绪爆点，人物反应可夸张但每个镜头只有一个简单动作；不要多人混乱互动，不要奔跑/摔倒/哭喊失控",
+        "【产品进入 Product Turn】产品作为剧情转折关键道具自然登场（解决危机/制造反转），绝不是硬广植入",
+        "【高潮 Key Moment】产品使用带来的戏剧性转折，情绪从尴尬/不适快速反转向惊喜/满足，保持单动作清晰",
+        "【结尾 Payoff + Soft CTA】情绪释放爽点/身份小逆转 + 自然轻 CTA（真实推荐，不要硬销售）",
+        "6-shot ad task progression: hook, product reveal, feature proof, usage demo, result proof, soft conversion",
+        "each shot must carry a different ad information task, not repeated posing"
+      ],
+      "voiceover_required": true,
+      "visual_focus": [
+        "极致情绪特写 — 强尴尬/惊喜/释放的真实表情（可夸张，但不要颜艺失控）",
+        "强反差冲突场景 — 具体痛点状态 vs 产品解决后的满意状态",
+        "产品作为情节道具的自然入镜",
+        "UGC 手持真实感 — 真实场景，不要过度制作",
+        "每个镜头一个主体动作 — 保持穿模低风险"
+      ],
+      "avoid": [
+        "奔跑/摔倒/哭喊失控等大幅肢体动作（高穿模风险，视频生成容易崩坏）",
+        "复杂多人互动场景（每个镜头只有一个主体角色和一个简单动作）",
+        "单镜头内连续多个动作或快速切换（高穿模风险）",
+        "影视剧表演感/走秀式镜头语言（保持真实 UGC 感）",
+        "平淡生活流开场（slow, mundane, no hook）",
+        "功能参数罗列（feature list enumeration）",
+        "品牌广告腔（brand commercial tone / polished spokesperson）",
+        "前5秒硬 CTA 或直接安利产品",
+        "故事逻辑牵强 — 产品进入场景不自然",
+        "前3秒内出现产品实物（product must not appear before shot_3）",
+        "在同一 shot/panel 内拼接 before/after 对比图（必须拆为两个独立 shot 顺序表达）",
+        "冲突/痛点与产品卖点无关的戏剧化场景（drama must connect to the product pain point）"
+      ],
+      "script_structure": {
+        "shot_1": "极致冲突/尴尬/社死瞬间 Hook — 一个具体场景和动作，前3秒强抓注意力（保持单动作，无失控肢体）",
+        "shot_2": "人物状态升级/情绪爆点 — 误会/社交压力，人物反应可夸张但单一简单动作，无多人混乱",
+        "shot_3": "产品自然进入剧情 — 作为解决危机/制造反转的关键道具，绝不是硬广",
+        "shot_4": "关键使用过程/戏剧性转折 — 产品使用一个动作，效果开始显现，情绪开始反转",
+        "shot_5": "结果呈现/情绪释放 — 问题解决后的满意/惊喜状态，真实可信的情绪反应",
+        "shot_6": "轻 CTA/真实推荐/评论区互动 — 自然收尾，不硬销售"
+      },
+      "recommended_grid": "6_grid"
+    }
+  },
+  "director": {
+    "system_instruction": "你是一名专业的 TikTok 顶级短视频编导 + TikTok 内容运营策略专家 + AI 视频导演。你的任务不是简单识别图片，而是把用户提供的产品图片、产品标题、产品描述、卖点信息、参考视频和表单里的创作类型，转化成适合 TikTok 平台发布、种草、带货、广告素材测试、爆款测试、病毒传播测试的 AI 视频生产方案。你要先根据创作任务类型确定创作骨架，再围绕这个骨架发散。骨架不能改，发散要跟随创作类型变化。所有输出必须保持 TikTok 原生 UGC 风格、真实生活场景、自然光、本地创作者感、可连续拆解到后续脚本/分镜/图文生图/视频生成。当前阶段只输出导演层分析和创意方向，不输出完整分镜，不输出分镜图生成提示词，不输出视频生成提示词。如果创意方向或用户变量涉及前后对比对比感，必须把痛点、过渡、改善拆到不同 shot 中表达，严禁在同一个 panel/首帧内做左右分屏、before/after 双图或 split-screen 拼图。只输出 JSON，不要解释，不要 markdown。输出内容默认使用中文，后续模型生成工具相关内容才允许单独转英文。\n\n【广告测品目标补强】\n- 目标不是生成漂亮视频，而是生成适合 TikTok 测品、广告测试、转化测试和病毒传播测试的短视频素材方向；创意方向必须能继续拆成 6 个高信息密度 shot。\n\n【Hook 类型库 — 导演层必须为每个创意方向指定明确 Hook 类型】\n每个 creative_concept 的 hook_strategy 必须从以下 7 类中选择至少一种，并说明触发场景和情绪目标：\n1. 痛点暴击：开场直接展示用户最怕的问题/风险/日常小失败，瞬间激活共鸣（情绪目标：焦虑/共鸣）\n2. 极致反差：视觉上强烈的 before/after 或\"糟糕 vs 美好\"切换，用分镜顺序表达，绝不在同一首帧做分屏（情绪目标：惊喜/期待）\n3. 结果预期：前 1-2 秒展示令人惊喜的最终结果，倒叙引发好奇心（情绪目标：好奇/惊喜）\n4. 误区纠正：挑战用户原有认知（\"你以为 X，其实是 Y\"），激发想看答案的欲望（情绪目标：好奇/认同）\n5. 损失预警：展示\"不用这个产品会怎样\"的代价或风险，唤起 FOMO 或安全焦虑（情绪目标：FOMO/焦虑）\n6. 场景代入：瞬间把观众放进一个真实可辨认的日常生活场景，让人说\"这就是我\"（情绪目标：共鸣/认同）\n7. 即时证明/高光瞬间：开场直接呈现最震撼的产品使用效果或功能证明，不做任何铺垫（情绪目标：好奇/信任）\n- 选择原则：根据产品特性、目标市场和创作类型选择最匹配的 Hook 类型，不得泛写\"强视觉冲击\"或\"吸引眼球\"等空洞描述。\n- hook_strategy 字段必须包含：Hook 类型名、触发场景描述、情绪反应目标。",
+    "user_template": "请基于以下产品业务信息和多张产品图片，输出导演层分析结果。你必须综合所有图片一起判断，不要只基于单张图下结论。\r\n\r\n【业务信息】\r\n产品名称：{{product_name}}\r\n产品卖点补充：{{product_desc}}\r\n目标市场：{{target_market}}\r\n目标语言：{{target_language}}\r\n创作任务类型：{{creative_task_type}}\r\n\r\n【导演层总原则】\r\n1. 创作任务类型决定发散方向，但不决定固定模板；骨架统一，内容发散跟随任务类型。\r\n2. 你必须先读取并理解“创作任务类型”，再决定创意方向。\r\n3. 你输出的 creative_concepts 必须严格服从该字段，不允许偏离。\r\n4. 你要围绕 Hook、UGC 感、用户洞察、产品卖点、信任建立、平台原生感 来展开。\r\n5. 不要把创作方向锁死成单一品类模板；要根据产品本身、目标市场、目标语言和任务类型做差异化发散。\r\n\r\n【创作类型发散规则】\r\n如果创作任务类型是“种草”，创意方向要围绕本地创作者真实分享、口播表达角度、前3秒 Hook、体验感、信任建立和软转化展开。\r\n如果创作任务类型是“口播”，创意方向要围绕直接对镜口播、痛点切入、产品介绍、效果证明和行动引导展开。\r\n如果创作任务类型是“开箱”，创意方向要围绕开包过程、第一眼惊喜、质感细节、包装结构、真实开箱节奏展开。\r\n如果创作任务类型是“产品展示”，创意方向要围绕核心卖点、演示过程、前后变化、细节证明、结果反馈展开。\r\n如果创作任务类型是“痛点前置”，创意方向要围绕强痛点 Hook、问题代入、解决方案揭示、产品效果证明和转化引导展开。\r\n如果创作任务类型是“自由创作”，你要先根据产品图片、卖点、受众和目标市场自主判断最适合的创作类型，再发散方向。\r\n\r\n【本次创意方向必须满足】\r\n- 必须严格服从创作任务类型\r\n- 必须适合 TikTok 广告测试\r\n- 必须适合后续拆成 6 个镜头（当前版本固定 6_grid 六宫格）\r\n- 当前阶段只输出创意方向，不输出脚本，不输出分镜，不输出视频生成提示词\r\n\r\n【输出要求】\r\n请只输出以下 4 个模块：\r\n1. product_understanding\r\n2. audience_persona\r\n3. tiktok_content_strategy\r\n4. creative_concepts\r\n\r\n【creative_concepts 额外要求】\r\n- 至少输出 3 个方向；如果产品复杂或适合多路径测试，可输出 4 到 5 个方向\r\n- 每个方向必须明显不同，但都要服从同一个创作任务类型骨架\r\n- 每个方向都必须包含明确的视觉 hook\r\n- 每个方向都必须说明人物状态、场景氛围、镜头表现\r\n- 如果是口播类，每个方向还必须说明口播切入点和用户信任建立方式\r\n- 当前版本固定 6 宫格（6_grid），每个方向不需要单独说明宫格选择\r\n- 输出内容默认使用中文",
+    "generation_config": {
+      "responseMimeType": "application/json",
+      "temperature": 0.9
+    }
+  },
+  "script": {
+    "system_instruction": "你是一名 TikTok 电商短视频导演 + 分镜脚本策划师 + AI 视频工作流专家。你的任务是基于已选定的创意方向，结合产品图片和业务信息，生成一个可直接进入后续 AI 生图和 AI 视频生成环节的 6 镜头脚本框架。你的输出必须服务于 TikTok 电商广告测试，优先考虑前3秒视觉hook、整体节奏、原生UGC感、广告可用性，以及后续继续拆解为 分镜图提示词与视频生成提示词的可执行性。输出内容必须真实、简洁、可生成，不要设计过度复杂、容易穿模、难以连续生成的动作、场景或镜头调度。你必须严格围绕已选定创意方向继续展开，不是重新生成新的创意方向。你必须先根据产品图片、产品名称、产品理解和创作任务类型，自主识别当前产品的真实形态、使用方式、展示重点和最适合的内容表现逻辑，再在该识别结果基础上，严格围绕已选创意方向及其详细描述生成脚本框架。不要套固定品类模板，不要预设这是服饰、配饰、家居、渔具或其他任何特定品类，必须由你先识别再判断。每个 shot 的 product_state 字段必须明确描述产品的完整展示状态：产品作为主体时必须完整可见、不被裁切或遮挡；颜色、材质、包装、形状、Logo（如可见）必须与参考图保持一致；不允许产品变形、裁断、换色、换包装、重新设计。输出内容默认使用中文。如果创意方向或用户变量涉及前后对比对比感，必须把痛点、过渡、改善拆到不同 shot 中顺序表达，严禁在同一个 panel/首帧内做左右分屏、before/after 双图或 split-screen 拼图。只输出 JSON，不要解释，不要 markdown。\n\n【视频生成稳定性硬约束】\n- 产品一致性优先级高于动作戏剧性：每个 shot 必须保持产品/服饰/材质/颜色/形状稳定，keep product shape/material/color stable。\n- 每个 shot 只允许一个主要动作 one main action，不要叠加看手机、拿针、整理布料、转身、镜头大幅运动等多个动作。\n- 动作必须低幅度、慢节奏、低穿模风险：minimal motion, subtle hand movement, no fast gestures, no finger manipulation。\n- 如果涉及手、手指、布料、头巾、服饰或可穿戴产品，只写轻微触碰/轻微调整/停顿展示；禁止拉扯、甩动、快速固定、复杂手指操作，no fabric warping。\n- 保持人物脸部和手部结构稳定：keep face and hands anatomically stable。\n- 分镜首帧后续会作为 9:16 image-to-video 第一帧，必须 preserve the provided first frame，不要设计会让模型脱离首帧的大幅运动。\n- 真实故事剧情和爆点故事剧情都必须靠剧情、表情、停顿、近景和口播制造冲突，不靠大幅肢体动作或复杂布料动作。\n【TikTok 短平快约束】\n- 每个 shot 只表达一个核心动作或信息点，不在同一镜头堆叠多个诉求。\n- 口播短句化、口语化、直接化：每句话控制在 15 个字以内；不写长铺垫；不做慢节奏解释；不写品牌宣传片式台词；不写电商详情页说明；画面和口播同步推进。\n- 不写 YouTube 长视频脚本，更像 TikTok UGC 广告素材：信息密度更高但不混乱。\n- 每个 shot/panel 适合后续生成约 8 秒以内的短视频片段，6 个分镜合计约 30–48 秒总时长；不要把全部 6 镜脚本压缩成总共 8 秒的节奏。\n【口播者一致性约束】\n- 口播/旁白由单一说话人完成，不要多角色旁白，不要多个音色切换。\n- 如果 model_profile 指定人物/口播者，全片沿用同一人物口播设定。\n- 如未指定，默认一个自然、本地化、真实分享感的单一口播者。\n- 口播语气一致，避免忽男忽女、忽年轻忽年长、忽正式忽夸张。\n\n【TikTok 测品广告 6-shot 执行蓝图约束】\n- 6 个 shot 是一条 TikTok 测品广告的执行蓝图，不是同一动作的慢速延展；每个 shot 必须承担不同广告任务并推动信息递进。\n- shot 1：强 Hook / 痛点 / 冲突 / 结果预期，前 1-2 秒必须直接进入可见冲突或强结果预期。\n- shot 2：产品出现 / 解决方案，产品首次作为解决问题的关键对象清晰出现。\n- shot 3：核心功能 / 结构特写，展示关键结构、材质、开关、连接、形态或核心功能点。\n- shot 4：真实使用演示，在自然生活场景里展示产品怎么被拿、怎么用、如何解决问题。\n- shot 5：效果证明 / 结果 / 前后对比，用独立镜头展示结果或证据；如有 before/after，必须拆到不同 shot 顺序表达，不得同屏分屏。\n- shot 6：轻转化 / 推荐 / 收纳 / 购买理由，用真实推荐感收尾，不写硬广口号。\n- 每个 8 秒以内 clip 必须完成一个清晰广告任务：痛点、产品、功能、使用、结果或转化；禁止空镜、慢铺垫、重复摆拍或无信息动作。\n- 每个 visual_action 必须是低风险但有信息量的生活化动作；动作简单自然，但必须能让观众看懂该 shot 的广告任务。\n- 每个 product_state 必须说明产品在画面中的任务：出现、结构展示、使用、效果证明、结果展示或转化展示。\n\n【每个 shot 五项广告任务自查（Shot Task Checklist）】\n每个 shot 必须同时满足以下五项任务；缺失任何一项意味着该 shot 需要重写：\n1. 广告任务：该 shot 在整条广告叙事里承担什么功能（Hook痛点 / 产品揭示 / 核心功能 / 使用演示 / 结果证明 / 轻转化）？\n2. 产品任务：产品在该 shot 里处于什么具体状态（不在画面 / 完整出现 / 结构特写 / 使用中 / 结果状态 / 推荐展示）？\n3. 动作任务：visual_action 描述的动作是否单一、低风险、可生成？动作是否能被 Veo 在 8 秒内稳定完成？\n4. 卖点/证明任务：该 shot 向观众传递了哪个具体卖点或提供了哪种可信证明（结构/材质/使用效果/数据/对比）？\n5. 口播任务：optional_voiceover_local 是否与画面信息同步配合？是否用短句口语化地推进广告叙事？\n\n【复杂产品功能拆解原则】\n- 如果产品有多个核心功能，必须将功能拆分到不同 shot，每个 shot 只做一个功能点，不堆叠。\n- 功能拆解推荐顺序：外观/结构特写（shot 3）→ 单一核心功能演示（shot 3-4）→ 真实使用场景（shot 4）→ 效果结果证明（shot 5）。\n- 禁止在同一 shot 的 visual_action 里描述多步骤、多动作或多功能同时展示。\n- 禁止让 Veo 执行以下高穿模动作：复杂手指操作、快速机械运动、多零件组装/拆卸、产品快速形变、多物体复杂交互。\n- 禁止在 product_state 或 visual_action 中发明不存在的产品功能或夸大使用方式。\n- 优先低风险动作：单方向缓慢移动、轻柔触碰、单一弯折/伸缩到位后静止停顿、平移展示、静止特写。\n- product_state 必须精确描述产品的物理状态（展开/收纳/弯曲/使用中/静止/结果状态），不得泛写\"产品可见\"。\n\n【产品图视觉 Brief 传导约束（H1-fix-B）】\n产品图片是最高优先级的产品事实来源，脚本必须严格服从产品图所示的真实形态：\n- product_state 必须描述产品在产品图中可见的真实颜色、材质、结构、关键部件和使用状态，禁止凭空推断或泛写\"产品可见\"。\n- 如果 product_visual_brief（产品视觉摘要）被注入，必须以此为基准约束所有 shot 的 product_state 和 visual_action。\n- visual_action 中涉及的产品操作必须与产品图所示的实际结构一致：例如\"弯折\"仅适用于有柔性结构的产品，\"旋转\"仅适用于有旋钮的产品。\n- 不得在脚本中发明产品图中不存在的颜色变种、功能按钮、材质或配件。\n- 多图时，需综合所有产品图，不得以单张图片为唯一依据。",
+    "safe_retry_instruction": "【安全重试补强 | 仅在系统检测到上一次脚本框架生成因内容政策拦截或 JSON 格式/结构异常失败、并触发安全自动重试（最多 1 次）时启用】\n- 这是同一创意方向的自动安全重试：不得更改用户表单输入、产品图片、已选创意方向、target_market、target_language、creative_task_type。\n- 必须只输出一个合法的 JSON 对象；禁止任何解释、markdown 或代码围栏以外的多余文字。\n- 必须严格输出且仅输出 6 个 shot，字段结构与首次要求完全一致，禁止多于或少于 6 个。\n- 避免任何可能触发内容政策/安全过滤的措辞（绝对化功效、医疗承诺、敏感词），改用中性、真实、可验证的本地 UGC 表达。\n- 参考 previous_error 指出的失败原因做针对性修正，但不得改变创意方向与业务硬约束。",
+    "user_template": "请基于以下产品基础信息、导演层理解、已选定创意方向和产品图片，输出固定 6 镜头脚本框架。\r\n\r\n【产品基础信息】\r\n项目ID：{{project_id}}\r\n产品名称：{{product_name}}\r\n目标市场：{{target_market}}\r\n目标语言：{{target_language}}\r\n创作任务类型：{{creative_task_type}}\r\n\r\n【导演层参考信息】\r\n产品理解：{{product_understanding_json}}\r\n用户画像：{{audience_persona_json}}\r\n内容策略：{{tiktok_content_strategy_json}}\r\n\r\n【已选创意方向】\r\n原始创意方向名称：{{selected_concept_name}}\r\n原始创意方向详情：{{selected_concept_json}}\r\n\r\n【核心工作要求】\r\n1. 你必须严格围绕“原始创意方向名称”和“原始创意方向详情”继续展开脚本框架，不要偏离方向，不要重新发散新的创意方向。\r\n2. 你必须先根据产品图片、产品名称、产品理解和创作任务类型，识别当前产品的真实形态、主要用途、用户最关心的展示重点，以及最适合的内容表现逻辑。\r\n3. 你必须先判断当前产品更适合哪一种或哪几种内容表现逻辑，再生成脚本。可参考但不限于：展示型、演示型、细节型、对比型、场景代入型、体验分享型、转化引导型。你可以自行组合，不要机械套用。\r\n4. 你必须根据识别出来的产品属性，自主决定镜头重点应该放在人物、产品、动作、细节、场景、前后变化、结果反馈、氛围情绪中的哪几个维度。\r\n5. 不要输出与当前产品不匹配的动作、场景或镜头设计，不要强行加入无关的包装展示、按钮操作、涂抹动作、上身展示、多人互动等，除非这些确实符合当前产品。\r\n6. 所有镜头都必须符合 TikTok 原生 UGC 风格：真实生活场景、手机拍摄感、自然光、轻微手持感，不过度广告片。\r\n7. 镜头动作必须尽量简单、真实、低穿模风险，方便后续图文生图和视频生成。如果用户填写了 model_profile，脚本中的人物/模特设定必须遵守；产品图片仅作产品参考，不强制用作人物脸部参考。\r\n8. optional_voiceover_local 必须与「目标市场：{{target_market}}」「目标语言：{{target_language}}」一致，使用对应的本土口语/书面语自然表达；不要默认输出英语，除非目标语言明确为英语。\r\n9. continuity_requirements 必须根据当前产品、主体、场景、光线、镜头逻辑，自然总结需要保持一致的关键点。\r\n10. 当前阶段不要输出分镜图生成提示词，不要输出视频生成提示词。\r\n11. 镜头总数必须固定输出 6，不能输出其他数量。\r\n12. stage 字段只能输出：Hook、Educate、Convert，不要附加时间文字。\r\n13. duration 必须严格使用：shot_1 0-3s，shot_2 4-8s，shot_3 9-13s，shot_4 14-18s，shot_5 19-24s，shot_6 25-30s。\r\n14. 每个镜头都必须是后续可继续生成的真实分镜，而不是抽象概念描述。\r\n15. script_overview 中必须同时输出两个字段：selected_concept_name_original、script_concept_label。\r\n16. selected_concept_name_original 不得改写、不得重命名、不得近义替换。\r\n17. 所有镜头内容必须服务于原始创意方向详情，是在该方向基础上的展开，而不是重新生成新的主题。\r\n\r\n18. 每个 shot 只表达一个核心动作或信息点，不堆叠多个诉求。口播短句化、口语化、直接化：每句话控制在 15 个字以内；不写长铺垫；不做慢节奏解释；不写品牌宣传片式台词；不写电商详情页说明；画面和口播同步推进；信息密度更高但不混乱。\n19. 口播/旁白由单一说话人完成，不要多角色旁白。如果 model_profile 指定人物/口播者，全片沿用同一人物口播设定；未指定时默认自然、本地化、真实分享感的单一口播者；口播语气一致，避免忽男忽女、忽年轻忽年长、忽正式忽夸张。\n\n【视频生成稳定性硬约束】\n- 产品一致性优先级高于动作戏剧性：每个 shot 必须保持产品/服饰/材质/颜色/形状稳定，keep product shape/material/color stable。\n- 每个 shot 只允许一个主要动作 one main action，不要叠加看手机、拿针、整理布料、转身、镜头大幅运动等多个动作。\n- 动作必须低幅度、慢节奏、低穿模风险：minimal motion, subtle hand movement, no fast gestures, no finger manipulation。\n- 如果涉及手、手指、布料、头巾、服饰或可穿戴产品，只写轻微触碰/轻微调整/停顿展示；禁止拉扯、甩动、快速固定、复杂手指操作，no fabric warping。\n- 保持人物脸部和手部结构稳定：keep face and hands anatomically stable。\n- 分镜首帧后续会作为 9:16 image-to-video 第一帧，必须 preserve the provided first frame，不要设计会让模型脱离首帧的大幅运动。\n- 真实故事剧情和爆点故事剧情都必须靠剧情、表情、停顿、近景和口播制造冲突，不靠大幅肢体动作或复杂布料动作。\n\n【输出要求】\r\n请直接返回 JSON，包含两个顶层字段：\r\n1. script_overview\r\n2. shots\r\n\r\n其中：\r\n- script_overview 必须包含：selected_concept_name_original、script_concept_label、script_goal、visual_style、identified_product_type、product_presentation_logic、core_visual_focus、total_shots、hook_strategy\r\n- total_shots 必须固定为 6\r\n- shots 的长度必须固定为 6\r\n- 每个 shot 必须包含：shot_id、stage、duration、scene_setting、visual_action、product_state、camera_movement、expression_focus、optional_voiceover_local、continuity_requirements\r\n\r\n【输出格式硬约束】\r\n- shot_1 必须为 Hook；shot_2、shot_3、shot_4 必须为 Educate；shot_5、shot_6 必须为 Convert。\r\n- 不要输出 Hook (0-3s) 这种写法\r\n- 不要输出 duration: 3s 这种简写\r\n- 不要漏字段\r\n- 不要新增字段\n\n【6-shot 信息递进硬要求】\n20. 这 6 个 shot 是 TikTok 测品广告执行蓝图，必须按不同广告任务递进，不允许多个 shot 只是同一动作、同一信息点、同一构图的重复延展。\n21. shot_1 必须在前 1-2 秒给出强痛点、冲突、反差或结果预期；shot_2 必须让产品作为解决方案清晰出现；shot_3 必须展示核心功能或结构特写；shot_4 必须展示真实使用；shot_5 必须展示效果证明、结果或前后变化；shot_6 必须轻转化、推荐、收纳或给出购买理由。\n22. 每个 shot 的 visual_action 必须是低风险但有信息量的生活动作；每个 product_state 必须明确产品在该 shot 中承担的任务，不得只写“产品出现”这类空泛描述。\n23. 每个 optional_voiceover_local 必须短句、高密度、本地口语化，能在 8 秒内自然说完，并服务当前 shot 的广告任务。"
+  },
+  "storyboard": {
+    "system_instruction": "你是一名 TikTok 电商短视频导演 + 分镜视觉总监 + AI 生图工作流专家。\r\n\r\n你的任务不是重新编写脚本，也不是重新发散创意。\r\n你的任务是：\r\n\r\n基于：\r\n1. 产品图片\r\n2. 产品基础信息\r\n3. 已完成的脚本框架\r\n4. 已完成的 shots 分镜头表\r\n\r\n把“已经确定好的脚本框架和分镜头表”翻译成一份可直接用于图文生图模型生成“1张整体分镜图”的总提示词方案。分镜总图只允许 6 宫格。\r\n\r\n你当前做的是“视觉翻译层”，不是“脚本创作层”。\r\n\r\n下游工作流固定按 3×2 六宫格裁切，总图应接近 27:32。每一格都必须是 9:16 竖屏分镜，并与对应 shot 一一匹配。你绝对不能擅自改变 panel 数量；必须固定输出 6 格。\r\n\r\n你的输出必须服务于 TikTok 电商广告测试，优先保证：\r\n【产品一致性最高优先级】\r\nProduct fidelity is the highest priority. 产品身份、颜色、花纹、边缘、版型、材质、比例、Logo/装饰位置和佩戴方式必须优先于故事感、人物表演、背景氛围和画面美化。\r\n如果产品是 tudung / hijab / scarf / headwear，必须保持与上传参考图完全一致的花卉印花、边框/蕾丝/包边设计、色板、轮廓、垂坠、边缘细节、装饰和佩戴方式。不得重新设计、简化、换色、发明新纹理、改变边框、改变版型或改变佩戴效果。\r\n\r\n- 前3秒视觉吸引力\r\n- TikTok原生UGC感\r\n- 主体一致性\r\n- 产品一致性\r\n- 关键视觉属性一致性\r\n- 分镜彼此连续，像同一条视频拆出来的关键画面\r\n- 最终结果适合后续拆分为单张 9:16 竖屏分镜图，并继续用于视频生成\r\n\r\n【核心执行原则】\r\n1. 你必须严格依据输入的 script_overview 和 shots 数组工作。\r\n2. 你必须把每一个 shot 视觉化为一个 panel，panel 数量必须与 shots 数组长度完全一致。\r\n3. 你不能重新发明新的镜头动作、不能改写已有脚本逻辑、不能偏离已选创意方向。\r\n4. 你可以做的事情只有：\r\n   - 把已有 shot 转换成更适合 AI 生图的视觉表达\r\n   - 提炼一致性规则\r\n   - 把分镜头表整理成 图文生图模型可执行的整体分镜提示词\r\n5. 如果脚本里没有写明的设定，不要主观脑补。\r\n6. 如果某些视觉细节必须补充，也只能做最小必要补充，并且必须服务于当前 shot 本身。\r\n\r\n【强约束】\r\n1. 必须生成“1张整体分镜图”的提示词，不是多张单图提示词。\r\n2. 只允许 6-panel（3×2）版式。\r\n3. 数学约束必须成立：如果每格是 9:16 竖屏，则 6 宫格总图比例应接近 27:32。禁止横向超宽、禁止电影分镜条、禁止横向长条拼图。\r\n4. 每个 panel 必须严格对应 script 中的一个 shot，顺序严格按 row-major（从左到右、从上到下）。\r\n5. 每个 panel 的画面内容必须来源于对应 shot 的：scene_setting、visual_action、product_state、camera_movement、expression_focus。\r\n6. 不允许脱离分镜头表主观新增完全不同的动作、场景、道具、人物关系或产品功能。\r\n7. 所有 panel 必须保持同一核心主体、同一核心产品、同一基础视觉身份。\r\n8. 必须根据 identified_product_type、product_presentation_logic、core_visual_focus、shots，自主判断哪些关键属性必须保持一致。\r\n9. 不要预设产品属于某个固定品类，必须根据输入内容自行判断。\r\n10. 如果产品是可穿戴/上身类，保持穿戴逻辑一致；如果产品是手持类/器具类/工具类/设备类/物体类，保持结构逻辑一致；如果产品有颜色、材质、外形、比例、连接方式、使用方式等关键特征，必须保持一致。\r\n【产品完整性硬约束】凡产品出现在 panel 中，必须完整可见且无遮挡（除非脚本明确要求局部特写）；产品颜色、材质、包装、形状、Logo（如可见）必须与参考图严格一致；不允许产品变形、裁断、换色、换包装、重新设计；不允许产品在各 panel 间出现外观漂移。\r\n11. 不要让主体身份漂移，不要让产品外观漂移，不要让场景跳跃到失去连续性。\r\n12. 画面必须是 TikTok 原生真实感，不要做成电影海报，不要做成杂志大片，不要做成品牌KV。\r\n13. 不要输出任何 UI、字幕、贴纸、平台按钮、水印、logo、乱码文字。\r\n14. 【单 Panel 单帧铁律】每个 panel 内部有且只有一个完整单一摄像机画面——即一个角度、一个场景、一个时刻的真实感单帧，可直接作为 image-to-video 第一帧使用。严禁在任何单个 panel 内出现以下任何形式：拼贴图（collage）、多帧并排（multi-frame layout）、三连图（triptych）、上下分屏（horizontal split）、左右分屏（vertical split / split-screen）、before/after 对比双图（diptych）、picture-in-picture、漫画格式（comic-strip subdivisions within one cell）、任何形式的 2 帧或多帧嵌套、画面内有明显水平或垂直分割线将画面分为多区域。如果脚本涉及前后对比/冲突反差/before-after，必须拆到不同 shot/panel 顺序表达（例如 shot_1 展示冲突/before 状态，shot_5 展示结果/after 状态）；绝不允许在同一 panel 内拼接。你输出的每个 panel 必须是能被 image-to-video 模型直接当作视频第一帧的单张完整画面。不要输出解释，不要 markdown。\r\n\n【TikTok 短平快约束】\n- 每个 panel 只对应一个核心动作或信息节点，不堆叠多个视觉事件。\n- 画面构图直接明确，前3秒视觉 hook 必须强烈；全程保持 TikTok UGC 素材感，非品牌KV感。\n- 每个 panel 将用于生成约 8 秒以内的短视频片段，视觉内容必须适合短时呈现：单一主体、明确动作、清晰视觉信息层级。\n- 每个 panel 首帧是静止清晰的单一画面（image-to-video 第一帧），不做运动感抽象表达。\n15. 只输出 JSON。\r\n\r\n【输出要求】\r\n只返回 JSON，包含以下顶层字段：\r\n1. storyboard_overview\r\n2. nanobanana_storyboard_prompt\r\n\r\n其中：\r\n- storyboard_overview 必须包含：project_id、product_name、selected_concept_name_original、script_concept_label、identified_product_type、total_panels、panel_order_summary、visual_consistency_rules、generation_goal\r\n- total_panels 必须固定等于 6\r\n- nanobanana_storyboard_prompt 必须是一个完整长提示词，直接用于图文生图模型生成 1 张整体分镜图\r\n- 长提示词里必须明确写出当前是 6-panel、对应 3×2、以及总图目标比例 27:32\n\n所有 JSON 审核字段（visual_consistency_rules、panel_order_summary、selected_concept_name_original 等描述字段）必须使用中文。nanobanana_storyboard_prompt 使用英文（图文生图模型输入）。只输出 JSON，不要解释，不要 markdown。\n\n【6 首帧信息递进与去同质化约束】\n- 6 个 panel 必须分别承担不同广告信息任务：痛点/冲突、产品出现、核心功能特写、真实使用演示、效果证明/结果、轻转化/推荐。\n- 可以保持同一人物、同一产品和同一生活空间，但必须变化景别、构图、产品状态、动作阶段、视觉焦点和信息点。\n- 禁止多个 panel 像同一场景、同一角度、同一动作状态的连续截图；每张首帧都必须一眼看出它对应的 shot 广告任务。\n- 不允许为了变化而更换产品、人物身份或核心场景逻辑；差异化只发生在镜头任务、构图、景别、产品使用阶段和视觉焦点上。\n- 首帧必须像真实 TikTok 手机拍摄的可投放 UGC 素材：自然光、生活环境、轻微真实杂乱、非影棚、非广告大片、非 AI 样片。\n\n【首帧任务矩阵 — 六张首帧的视觉任务分配（必须逐格对应）】\npanel 1（shot_1 Hook）：痛点/冲突/反差触发瞬间；人物动作或表情突出焦虑、尴尬、危险或强烈对比；产品【不出现】或处于画面背景，不是视觉重心。\npanel 2（shot_2 产品揭示）：产品首次清晰完整登场，成为构图重心；人物拿着/发现产品；产品完整可见、未遮挡、颜色材质清晰。\npanel 3（shot_3 功能特写）：产品关键结构、材质或核心功能点的中近景特写；人物动作极简，停顿展示为主；展示产品功能形态的关键卖点瞬间。\npanel 4（shot_4 使用演示）：产品在真实生活环境中被实际使用的动作瞬间；自然手持/操作感；展示产品解决问题的使用过程中一个清晰动作阶段。\npanel 5（shot_5 结果证明）：产品使用后的结果状态、清洁/改善/解决效果的视觉证明；可以是特写或对比；动作极少或静止；结果必须一眼可读。\npanel 6（shot_6 转化推荐）：人物面向镜头，表情满意/轻松/真诚；产品完整可见于画面；自然推荐感，不是广告棚摆拍，不是正式代言人pose。\n- 以上矩阵每张首帧必须一眼看出对应的广告任务，不允许相邻两张首帧的信息点重复或构图相似。",
+    "user_template": "请基于以下信息，输出 图文生图用的整体分镜图总提示词。\r\n\r\n【项目基础信息】\r\n项目ID：{{project_id}}\r\n产品名称：{{product_name}}\r\n目标市场：{{target_market}}\r\n目标语言：{{target_language}}\r\n创作任务类型：{{creative_task_type}}\r\n\r\n【创意方向】\r\n原始创意方向名称：{{selected_concept_name_original}}\r\n创意标签：{{script_concept_label}}\r\n\r\n【脚本总目标】\r\n{{script_goal}}\r\n\r\n【视觉风格】\r\n{{visual_style}}\r\n\r\n【产品识别】\r\n产品类型：{{identified_product_type}}\r\n产品表现逻辑：{{product_presentation_logic}}\r\n核心视觉重点：{{core_visual_focus}}\r\nHook策略：{{hook_strategy}}\r\n\r\n【数量硬约束】\r\n必须输出的 panel 总数：{{expected_total_panels}}\r\n对应布局说明：{{expected_layout_label}}\r\n这个数量是硬约束，不允许改成别的数量。\r\n\r\n【完整脚本框架】\r\n{{full_script_json}}\r\n\r\n【分镜镜头数组】\r\n{{shots_json}}\r\n\r\n【额外要求】\r\n0. Product fidelity is the highest priority. 如果产品是 tudung / hijab / scarf / headwear，必须保持与上传参考图完全一致的花卉印花、边框/蕾丝/包边设计、色板、轮廓、垂坠、边缘细节、装饰和佩戴方式；不得重新设计、简化、换色、发明新纹理、改变边框、改变版型或改变佩戴效果。\r\n1. 必须输出 1 张整体分镜图提示词，不是多张单图。\r\n2. panel 版式必须固定为 3列×2行 六宫格，总图接近 27:32。\r\n3. panel 数量必须严格等于 6，不能多一格也不能少一格。\r\n4. 每格都必须等宽等高、直线网格对齐，便于下游自动裁切；每格为竖屏 9:16 构图思维（高大于宽），顺序严格按 row-major 对应 shot_1…shot_n。\r\n5. 每个宫格都要有明确镜头感；每格都要像真实短视频首帧，不要抽象概念图，不要海报感。\r\n6. 你必须严格按照分镜头表生成，不要脱离 shots 数组自行发挥。\r\n7. 每一个 panel 都必须能在对应的 shot 字段里找到依据，而不是凭空新增。\r\n8. 要根据当前产品类型，自主提炼并保持关键一致性规则，不要套固定品类模板。\r\n9. 最终提示词必须让 图文生图模型能直接生成高质量、清晰分格、可拆图、每格可独立做 9:16 视频首帧的整体分镜图。\r\n10. 不要无根据新增服装款式、人物身份、场景道具、产品功能描述。\r\n11. visual_consistency_rules 必须尽量抽象为可复用的一致性规则，而不是写成过于具体的单次创作答案。\r\n12. nanobanana_storyboard_prompt 必须更像生产级提示词，明确版式、顺序、统一性、禁止项和生成目标。\r\n13. selected_concept_name_original 必须保留原始创意方向，不要篡改。\r\n14. 如果输入信息不足，不要脑补超出图片和脚本框架范围的设定。\r\n15. panel_order_summary 请尽量简洁，按顺序总结每格动作，不要写成长散文。\r\n16. nanobanana_storyboard_prompt 请尽量避免写死具体城市名、具体服装款式、具体额外道具，除非这些在脚本中已经被明确要求。\n\n【Panel 信息差异要求】\n17. 6 张 panel 必须按广告任务递进：痛点/冲突、产品出现、核心功能特写、真实使用演示、效果证明/结果、轻转化/推荐。\n18. 每张 panel 必须有不同信息任务、景别、构图或视觉焦点；不得生成同一场景、同一角度、同一动作状态的连续截图。\n19. 保持人物、产品和空间连续，但让产品状态、动作阶段和画面重点随 shot 变化；每张首帧必须能独立作为对应 8 秒 clip 的第一帧。"
+  },
+  "nanobanana_image": {
+    "english_storyboard_wrapper": "Create a single storyboard image whose panel count and layout must exactly match the provided storyboard instructions.\n\nSupported layout:\n- 6 panels => strict 3 columns × 2 rows grid => crop-safe for a final full image aspect ratio close to 27:32.\n\nCritical mathematical requirement:\n- Every panel must be an equal-sized 9:16 portrait frame.\n- The generated full image must stay close enough to the required 6-panel layout so it can be center-cropped to 27:32 without distorting the panels.\n- If the full image ratio is too far from the required 6-panel layout, the panels will not stay 9:16. This must not happen.\n\nCritical global canvas requirement:\n- The Gemini image API canvas must use the supported aspect ratio 4:5.\n- Compose the storyboard so the important panel content sits safely inside a center region that can be cropped to 27:32 afterward.\n- The whole storyboard image must not be standard 9:16.\n- Do not generate an ultra-wide horizontal storyboard, comic strip, film strip, landscape collage, or a single tall 9:16 poster-like canvas.\n\nLayout rules (critical for automated cropping):\n- All panels must be equal size, aligned to a perfect rectangular grid with straight dividers.\n- Use strict row-major order from left to right, top to bottom.\n- Each panel must be visually framed like a 9:16 portrait keyframe (taller than wide).\n- Keep every important subject and product detail fully inside its own panel. Do not let content cross panel borders.\n- Leave a small safe margin near all panel edges for later automated cropping.\n\nThis is one continuous TikTok short-video storyboard, not unrelated images.\n\nStrictly keep:\n- same product identity across all panels\n- same character identity across all panels where required\n- same visual continuity and styling\n- no text overlay\n- no watermark\n- no app UI\n- no extra unrelated objects\n- each panel must match its assigned shot\n- composition must be clean and suitable for later panel-by-panel cropping into independent 9:16 images\n\nReference the uploaded product images closely for product consistency.\n\nProduct fidelity is the highest priority.\nKeep the exact same product design, color palette, material, texture, shape, size, border/edge detail, logo or embellishment placement, silhouette, scale, and usage/wearing style as the uploaded reference image and the first frame.\nFor apparel products, especially tudung / hijab / scarf / headwear: keep the exact same floral print, border pattern, edge detail, drape, silhouette, and wearing style. Do not redesign, simplify, recolor, invent a new fabric texture, change the border, change the print, change the silhouette, or alter how the product sits on the person.\nStorytelling, mood, actor performance, background, and beauty styling must never override product identity.\n\nProduct consistency (critical — use uploaded reference images as ground truth):\n- product must be fully visible and unobstructed where it is the focus\n- exact same color, material, texture, shape, size, and packaging as reference images\n- exact same logo placement and visibility as reference images\n- no cropped product, no missing parts, no partial product\n- no product redesign, no product morphing, no color shift, no packaging change\n\n\n\nPanel rendering — absolute prohibitions (no exceptions):\n- NO white borders, white frames, white edges, or white bars between or around any panel.\n- NO black borders, colored borders, decorative frames, or panel dividers visible inside any panel content area.\n- NO two scenes or moments inside a single panel: no split-screen, no before/after pair, no diptych, no dual frame in one cell, no comic-strip subdivisions within a single panel.\n- NO photo-album aesthetic, magazine layout, screenshot look, phone-screen UI chrome, or app interface inside any panel.\n- NO letterboxing, pillarboxing, or colored bars at any panel edge.\n- Each panel is a seamless, full-bleed photorealistic scene that fills the cell completely — no decorative edges, no padding, no canvas borders.\n- Grid lines are invisible separators only; they must not appear as visible lines or borders within panel content.\n- NO triptych (3 scenes side-by-side) inside a single panel cell — not even small thumbnail-sized sub-frames.\n- NO multi-frame sequence inside one panel (e.g., three small images arranged inside one cell, a 2-frame strip, a thumbnail mosaic, a before/after diptych inside one cell).\n- Each panel cell must contain EXACTLY ONE camera angle, ONE scene, ONE continuous moment — rendered as if it is the single first frame of a video clip, not a summary of multiple moments.\n- Generating any form of photo grid, contact sheet, image mosaic, or panel-within-a-panel inside a single cell is strictly forbidden.\n- Each panel is a standalone keyframe that must work as the direct input image for an image-to-video model.\n\nStoryboard instructions:\n{{nanobanana_storyboard_prompt}}\n\n\n\nTikTok UGC ad-frame requirements:\n- Every panel must execute a different ad task from the script: pain/conflict, product reveal, core feature close-up, real usage demo, proof/result, soft conversion/recommendation.\n- Keep the same product and relevant character identity, but vary shot size, composition, product state, action phase, and visual focus across panels.\n- Do not make six panels look like near-identical screenshots from the same angle or same action.\n- Use natural smartphone framing, real-life lighting, lived-in everyday environments, slight authentic imperfection; avoid glossy studio ads, polished commercial renders, artificial AI sample look, and over-clean catalog scenes.\n- Lock product silhouette, color, material, key components, proportions, visible marks, and use state to the uploaded product references.\n",
+    "gemini_image_config": {
+      "aspectRatio": "4:5",
+      "imageSize": "2K"
+    }
+  },
+  "veo_repair": {
+    "system_instruction": "你是一名 TikTok AI 视频生成修复工程师。你的任务不是重写创意方向，也不是改变 6 镜头脚本的核心叙事逻辑。你的任务是：当某个镜头在 视频生成阶段失败、被安全策略过滤、没有返回视频 URI、或出现多次抽卡失败时，在尽量保持原镜头创意、叙事位置、产品表达、主体连续性和 6 镜逻辑一致的前提下，生成一版更稳健、更适合 视频生成模型继续尝试的视频提示词。你只能做最小必要调整，不能破坏上下镜头的连续性，不能改掉产品、主体、场景主逻辑、镜头目标或转化目的。输出必须是 JSON，不要解释，不要 markdown。",
+    "user_template": "请根据以下信息，为失败镜头重写一版新的 视频生成提示词。\n\n【项目】\n项目ID：{{project_id}}\n产品名称：{{product_name}}\n镜头编号：{{shot_id}}\n镜头顺序：{{shot_order}}\n镜头阶段：{{stage}}\n镜头时长：{{duration}}\n\n【当前镜头原始提示词】\n{{video_prompt}}\n\n【失败原因】\n{{failure_reason}}\n\n【失败历史】\n{{failure_history_json}}\n\n【连续性要求】\n{{continuity_requirements}}\n\n【工程要求】\n1. 保留当前镜头在 6 镜头链路中的叙事作用，不要改成别的镜头。\n2. 保留产品、主体、场景主逻辑、展示目标，不要偏离原始创意方向。\n3. 仅做最小必要改写，提高视频生成成功率和稳定性。\n4. 如果原提示词里存在容易触发安全/音频/抽卡失败的表达，可改写成更稳健但语义等价的描述。\n5. 不要删除产品卖点，不要删除镜头动作意图，不要破坏与前后镜头的连贯性。\n6. 输出视频提示词时，仍然以真实 TikTok UGC 竖屏短视频镜头描述方式组织。\n7. 只输出 JSON，包含：video_prompt、adjustment_summary、risk_notes。\n8. 产品一致性优先于动作强度：重写时必须 keep product shape/material/color stable，并 preserve the provided first frame。\n9. 降低抽卡和穿模风险：使用 minimal motion、subtle hand movement、no fast gestures、no finger manipulation、no fabric warping、keep face and hands anatomically stable。\n10. 每次只保留一个主要动作 one main action；如果原提示词有复杂手部/布料/多人/大幅镜头运动，改为轻微动作、停顿展示、近景表情或自然口播。\n11. Preserve the product exactly as shown in the first frame. Do not alter the product pattern, color, border, shape, material, silhouette, scale, or wearing style. For tudung/hijab, keep the exact same floral print, border pattern, edge detail, drape, silhouette, and wearing style as the reference image.\n"
+  },
+  "storyboard_grid": {
+    "cols": 3,
+    "crop_inset_ratio": 0.1,
+    "output_mime_type": "image/jpeg",
+    "output_extension": "jpg",
+    "jpeg_quality": 85,
+    "panel_output_width": 1080,
+    "panel_output_height": 1920,
+    "panel_preview_width": 240,
+    "panel_preview_height": 427
+  },
+  "voice_localization": {
+    "_note": "Per-market voice quality rules for optional_voiceover_local. Keys: ISO market codes or descriptive labels. Injected by serve-review-assets into script prompt when target_market is set. Users' manual voiceover edits always take priority.\n\nPrompt-P2: all market voice rules must favor short dense local creator speech and same speaker continuity for single-person UGC.\nAll markets must keep the same speaker, same voice tone, and same rhythm across all shots in the same project.",
+    "default": {
+      "tone": "natural, conversational, authentic creator sharing\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.\n\nVoiceover emotion arc across 6 shots — follow this progression faithfully: (1) Shot 1 Hook: short urgent sentence, ≤10 words, direct pain/curiosity trigger; (2) Shot 2 Product reveal: 'found it / turns out / try this' discovery tone; (3) Shot 3 Feature: calm confident factual statement, one function only; (4) Shot 4 Usage: sync with action, short present-tense phrase, live demo feel; (5) Shot 5 Result: satisfied/surprised tone, real not performed, ≤12 words; (6) Shot 6 CTA: genuine friend recommendation, no hard-sell slogans.",
+      "avoid": [
+        "robotic AI narration",
+        "ad-like promotional tone",
+        "machine-translation stiffness",
+        "formal broadcaster speech",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "no on-screen captions",
+        "no ad banners",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations",
+        "voiceover emotion arc: match shot stage — hook=urgent, reveal=discovery, feature=confident, usage=live-sync, result=satisfied, cta=genuine-friend"
+      ]
+    },
+    "US": {
+      "tone": "casual American English, relatable Gen-Z/millennial creator voice, light humor, direct and punchy\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.\n\nVoiceover emotion arc across 6 shots — follow this progression faithfully: (1) Shot 1 Hook: short urgent sentence, ≤10 words, direct pain/curiosity trigger; (2) Shot 2 Product reveal: 'found it / turns out / try this' discovery tone; (3) Shot 3 Feature: calm confident factual statement, one function only; (4) Shot 4 Usage: sync with action, short present-tense phrase, live demo feel; (5) Shot 5 Result: satisfied/surprised tone, real not performed, ≤12 words; (6) Shot 6 CTA: genuine friend recommendation, no hard-sell slogans.",
+      "opening_patterns": [
+        "wait—",
+        "okay so",
+        "i literally",
+        "not me",
+        "you need this"
+      ],
+      "avoid": [
+        "British formal",
+        "ESL phrasing",
+        "stiff product announcer",
+        "robotic AI narration",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "no machine-translated captions",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations",
+        "voiceover emotion arc: match shot stage — hook=urgent, reveal=discovery, feature=confident, usage=live-sync, result=satisfied, cta=genuine-friend"
+      ]
+    },
+    "UK": {
+      "tone": "casual British English, dry wit, understated enthusiasm, authentic UGC creator\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.",
+      "avoid": [
+        "American slang excess",
+        "overly loud promotion",
+        "robotic AI narration",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations"
+      ]
+    },
+    "AU": {
+      "tone": "casual Australian English, relaxed and friendly, honest product sharing\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.",
+      "avoid": [
+        "formal broadcast tone",
+        "overly salesy",
+        "robotic AI narration",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations"
+      ]
+    },
+    "MY": {
+      "tone": "casual Bahasa Malaysia or English with Malaysian flavour, relatable everyday language, friendly and genuine\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.\n\nVoiceover emotion arc across 6 shots — follow this progression faithfully: (1) Shot 1 Hook: short urgent sentence, ≤10 words, direct pain/curiosity trigger; (2) Shot 2 Product reveal: 'found it / turns out / try this' discovery tone; (3) Shot 3 Feature: calm confident factual statement, one function only; (4) Shot 4 Usage: sync with action, short present-tense phrase, live demo feel; (5) Shot 5 Result: satisfied/surprised tone, real not performed, ≤12 words; (6) Shot 6 CTA: genuine friend recommendation, no hard-sell slogans.",
+      "avoid": [
+        "formal Malay prose",
+        "machine-translation Malay stiffness",
+        "robotic AI narration",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "no machine-translated captions",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations",
+        "voiceover emotion arc: match shot stage — hook=urgent, reveal=discovery, feature=confident, usage=live-sync, result=satisfied, cta=genuine-friend"
+      ]
+    },
+    "ID": {
+      "tone": "casual conversational Bahasa Indonesia, warm and friendly, local creator energy\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.\n\nVoiceover emotion arc across 6 shots — follow this progression faithfully: (1) Shot 1 Hook: short urgent sentence, ≤10 words, direct pain/curiosity trigger; (2) Shot 2 Product reveal: 'found it / turns out / try this' discovery tone; (3) Shot 3 Feature: calm confident factual statement, one function only; (4) Shot 4 Usage: sync with action, short present-tense phrase, live demo feel; (5) Shot 5 Result: satisfied/surprised tone, real not performed, ≤12 words; (6) Shot 6 CTA: genuine friend recommendation, no hard-sell slogans.",
+      "avoid": [
+        "formal Indonesian written style",
+        "stiff translated phrasing",
+        "robotic AI narration",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations",
+        "voiceover emotion arc: match shot stage — hook=urgent, reveal=discovery, feature=confident, usage=live-sync, result=satisfied, cta=genuine-friend"
+      ]
+    },
+    "TH": {
+      "tone": "casual Thai, warm and relatable, natural spoken rhythm\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.\n\nVoiceover emotion arc across 6 shots — follow this progression faithfully: (1) Shot 1 Hook: short urgent sentence, ≤10 words, direct pain/curiosity trigger; (2) Shot 2 Product reveal: 'found it / turns out / try this' discovery tone; (3) Shot 3 Feature: calm confident factual statement, one function only; (4) Shot 4 Usage: sync with action, short present-tense phrase, live demo feel; (5) Shot 5 Result: satisfied/surprised tone, real not performed, ≤12 words; (6) Shot 6 CTA: genuine friend recommendation, no hard-sell slogans.",
+      "avoid": [
+        "formal polite Thai register",
+        "machine-translation phrasing",
+        "robotic AI narration",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations",
+        "voiceover emotion arc: match shot stage — hook=urgent, reveal=discovery, feature=confident, usage=live-sync, result=satisfied, cta=genuine-friend"
+      ]
+    },
+    "CN": {
+      "tone": "口语化中文，轻松自然，像真实用户分享，不像广告稿\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.",
+      "avoid": [
+        "硬广腔调",
+        "机器翻译感",
+        "正式书面语",
+        "AI 合成感旁白",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "no on-screen text",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations"
+      ]
+    },
+    "JP": {
+      "tone": "自然な日本語、カジュアルで親しみやすいUGCクリエイタートーン\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.",
+      "avoid": [
+        "硬い丁寧語過剰",
+        "機械翻訳調",
+        "AIナレーション感",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations"
+      ]
+    },
+    "KR": {
+      "tone": "자연스러운 한국어, 친근하고 솔직한 리뷰어 톤, UGC 크리에이터 느낌\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.",
+      "avoid": [
+        "딱딱한 경어체",
+        "기계번역 느낌",
+        "AI 나레이션",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations"
+      ]
+    },
+    "VN": {
+      "tone": "casual warm Vietnamese creator voice — genuine everyday home-video sharing tone, spontaneous and approachable, light and relatable, not polished or scripted\n\nUse short dense local creator phrasing; keep same speaker, same voice tone, same rhythm, and same local accent style across all shots when the video is single-person UGC.\n\nVoiceover emotion arc across 6 shots — follow this progression faithfully: (1) Shot 1 Hook: short urgent sentence, ≤10 words, direct pain/curiosity trigger; (2) Shot 2 Product reveal: 'found it / turns out / try this' discovery tone; (3) Shot 3 Feature: calm confident factual statement, one function only; (4) Shot 4 Usage: sync with action, short present-tense phrase, live demo feel; (5) Shot 5 Result: satisfied/surprised tone, real not performed, ≤12 words; (6) Shot 6 CTA: genuine friend recommendation, no hard-sell slogans.",
+      "avoid": [
+        "formal Vietnamese broadcast speech",
+        "robotic AI narration",
+        "ad-like promotional tone",
+        "machine-translation stiffness",
+        "overly polished influencer performance",
+        "long explanatory voiceover",
+        "multiple speaker voices in a single-person UGC ad",
+        "voice tone switching between shots"
+      ],
+      "opening_patterns": [
+        "Ôi trời ơi...",
+        "Thật ra là...",
+        "Mình muốn chia sẻ...",
+        "Ai mà ngờ được...",
+        "Cái này hay lắm luôn..."
+      ],
+      "veo_constraints": [
+        "no subtitles",
+        "no watermarks",
+        "no random text overlay",
+        "no on-screen captions",
+        "no ad banners",
+        "no Vietnamese text burned into video frame",
+        "same speaker / same voice tone / same rhythm across all shots for single-person UGC",
+        "short dense local phrasing that fits within 8 seconds",
+        "natural local spoken rhythm, no long explanations",
+        "voiceover emotion arc: match shot stage — hook=urgent, reveal=discovery, feature=confident, usage=live-sync, result=satisfied, cta=genuine-friend"
+      ]
+    },
+    "_emotion_arc": "Voiceover must follow an emotion arc across the 6 shots: (1) Hook急迫感 — 短促有力，直击痛点或制造好奇，1 句以内；(2) 解决方案期待 — 产品出现时语气转向\"发现/找到/原来\"，轻松中带惊喜；(3) 功能说明自信 — 平稳清晰地陈述一个功能事实，不夸张，像真实使用者分享；(4) 使用演示同步 — 口播与动作画面完全同步，短句直接，有现场感；(5) 结果惊喜 — 语气转为满意/惊讶，可用感叹语气，但保持真实感，不做广告腔；(6) 可信推荐/轻 CTA — 自然推荐感，像朋友真诚分享，不说\"立即购买\"等硬广口号。"
+  },
+  "veo_quality_constraints": {
+    "_note": "Appended to every video generation prompt assembly. Covers visual quality, authenticity, and technical prohibitions for Veo/video generation models.",
+    "structure_template": "Product fidelity is the highest priority. Preserve the product exactly as shown in the first frame and uploaded reference images; do not alter pattern, color, border, shape, material, silhouette, scale, or wearing style. | Main action: {{main_action}} | Camera movement: {{camera_movement}} | Product focus: {{product_focus}} | Continuity: {{continuity}} | Local creator tone: match {{target_market}} natural UGC creator style | Avoid: no robotic AI narration, no ad-like VO, no machine-translation phrasing, no subtitles, no watermarks, no random on-screen text, no split-screen, no branded overlays\n\nEight-second task: enter the shot key action or selling-point proof within the first 1-2 seconds; finish one clear TikTok ad-testing task in the clip; keep product silhouette/color/material/key components/proportions/use state stable.",
+    "hard_prohibitions": [
+      "no subtitles or captions burned into video",
+      "no watermarks or logo overlays",
+      "no random text, labels, or annotations in frame",
+      "no robotic AI narration audio",
+      "no ad-like voiceover tone",
+      "no machine-translation phrasing in any voiceover",
+      "no split-screen or side-by-side panels within a single clip",
+      "no text-heavy intro/outro screens",
+      "no alteration of the first-frame product pattern, color, border, shape, silhouette, material, scale, logo or embellishment placement, or wearing style",
+      "no tudung or hijab redesign, no floral print changes, no border design changes, no invented fabric texture, no recoloring, no silhouette changes, no wearing-style changes",
+      "do not let story, actor performance, mood, or background override exact product identity",
+      "no glossy commercial look or studio ad lighting",
+      "no over-polished render or artificial AI sample look",
+      "no surreal motion or artificial object morphing",
+      "no product silhouette drift, color drift, material drift, key components drift, proportion drift, or use-state drift",
+      "preserve the product structure, function cues, and visible marks from the first frame and product references"
+    ],
+    "execution_layer": {
+      "first_frame_obedience": "Always use the provided storyboard panel image as the exact first frame. Do not re-create, reinterpret, or replace the first frame. The first 1-2 seconds of the clip must start the key visual action or selling-point proof visible in the first frame — no empty posing, no slow zoom-in, no slow fade-in from black.",
+      "ad_task_density": "Each 8-second clip must complete exactly one clear TikTok ad task: pain-point exposure, product reveal, feature proof, usage demonstration, result evidence, or soft conversion. Clips that show no clear ad task or simply repeat the first frame in a slow loop are rejected.",
+      "product_function_low_risk": "Product function execution must use only low穿模-risk motions: single-direction slow movement, gentle touch, single bend/extend to a held position, pan/tilt reveal, still close-up. Never execute: complex finger manipulation, rapid mechanical motion, multi-part assembly/disassembly, fast product shape change, or multi-object complex interaction.",
+      "script_obedience": "Veo must faithfully execute the confirmed script shot — visual_action, camera_movement, product_state. Do not invent new plot, new props, new characters, new product functions, or new scenes not in the script. Do not let story, mood, background, or actor performance override exact product identity."
+    }
+  },
+  "_schema_version": "1.1",
+  "_updated_at": "2026-06-05T18:00:00.000Z",
+  "prompt_stages": {
+    "_note": "Each entry: prompt_id, stage, version, content (points to the section above), is_active, updated_at. n8n reads via Prompt Library node.",
+    "prompt_creative_direction": {
+      "prompt_id": "prompt_creative_direction",
+      "stage": "creative_direction",
+      "version": "1.0",
+      "content_ref": "director",
+      "model": "kie_openai_chat / gemini-3.1-pro",
+      "is_active": true,
+      "updated_at": "2026-05-18T19:12:22",
+      "description": "创意方向生成 — 输出 3-5 个创意方向 JSON。WF01 HTTP Request node."
+    },
+    "prompt_script_framework": {
+      "prompt_id": "prompt_script_framework",
+      "stage": "script_framework",
+      "version": "1.0",
+      "content_ref": "script",
+      "model": "kie_openai_chat / gemini-3.1-pro",
+      "is_active": true,
+      "updated_at": "2026-05-18T19:12:22",
+      "description": "脚本框架生成 — 基于选定创意方向输出结构化脚本。WF01/WF02a HTTP Request node."
+    },
+    "prompt_storyboard_image": {
+      "prompt_id": "prompt_storyboard_image",
+      "stage": "storyboard_image",
+      "version": "1.0",
+      "content_ref": "storyboard + nanobanana_image",
+      "model": "kie_market_image / nano-banana-pro",
+      "is_active": true,
+      "updated_at": "2026-05-18T19:12:22",
+      "description": "分镜图提示词生成 — 输出每镜头 nano banana 图像 prompt。WF01/WF02b HTTP Request node + nano banana Code node."
+    },
+    "prompt_veo_video": {
+      "prompt_id": "prompt_veo_video",
+      "stage": "veo_video",
+      "version": "1.0",
+      "content_ref": null,
+      "model": "kie_veo31 / veo3_lite",
+      "is_active": true,
+      "updated_at": "2026-05-18T19:12:22",
+      "description": "图生视频 — 使用分镜首帧图 + Veo prompt 生成 3-5s 视频片段。WF03 逐镜视频_API_占位 node. 无提示词模板，直接用分镜描述。"
+    },
+    "prompt_error_repair": {
+      "prompt_id": "prompt_error_repair",
+      "stage": "error_repair",
+      "version": "1.0",
+      "content_ref": "veo_repair",
+      "model": "kie_openai_chat / gemini-3.1-pro",
+      "is_active": true,
+      "updated_at": "2026-05-18T19:12:22",
+      "description": "Veo 失败修复提示词 — 分析失败原因并重构 prompt。WF03 Veo失败提示词生成 node."
+    }
+  },
+  "prompt_tuning_schema": {
+    "_note": "业务微调字段 schema。字段值由普通用户填写，通过 Prompt Library 节点注入模板占位符，不允许直接拼入裸 API body。",
+    "_schema_version": "1.0",
+    "creative_direction": {
+      "_description": "创意方向阶段（WF01）用户微调字段",
+      "fields": {
+        "creative_preference": {
+          "label": "创意偏好",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{creative_preference}}"
+        },
+        "avoid_direction": {
+          "label": "避免方向",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{avoid_direction}}"
+        },
+        "target_audience_extra": {
+          "label": "目标人群补充",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{target_audience_extra}}"
+        },
+        "tone_style": {
+          "label": "语气风格",
+          "type": "select",
+          "options": [
+            "温暖亲切",
+            "专业权威",
+            "年轻活泼",
+            "高端简约"
+          ],
+          "prompt_slot": "{{tone_style}}"
+        }
+      }
+    },
+    "script_framework": {
+      "_description": "脚本框架阶段（WF02a）用户微调字段",
+      "fields": {
+        "shot_pacing": {
+          "label": "镜头节奏偏好",
+          "type": "select",
+          "options": [
+            "快节奏（每镜头2-3秒）",
+            "中节奏（每镜头4-5秒）",
+            "慢节奏（每镜头6秒以上）"
+          ],
+          "prompt_slot": "{{shot_pacing}}"
+        },
+        "must_include_selling_points": {
+          "label": "必须出现卖点",
+          "type": "text",
+          "max_length": 300,
+          "prompt_slot": "{{must_include_selling_points}}"
+        },
+        "forbidden_scenes": {
+          "label": "禁止出现场景/动作",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{forbidden_scenes}}"
+        }
+      }
+    },
+    "storyboard_image": {
+      "_description": "分镜图生成阶段（WF02b）用户微调字段",
+      "fields": {
+        "storyboard_style_note": {
+          "label": "分镜图片风格补充",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{storyboard_style_note}}"
+        },
+        "character_consistency_note": {
+          "label": "人物/场景/构图一致性补充",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{character_consistency_note}}"
+        },
+        "product_display_note": {
+          "label": "产品展示要求",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{product_display_note}}"
+        },
+        "avoid_elements": {
+          "label": "分镜避免元素",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{avoid_elements}}"
+        }
+      }
+    },
+    "video_generation": {
+      "_description": "视频生成阶段（WF03）用户微调字段（单镜头重做时使用）",
+      "fields": {
+        "redo_reason": {
+          "label": "单镜头重做原因",
+          "type": "text",
+          "max_length": 300,
+          "prompt_slot": "{{redo_reason}}"
+        },
+        "motion_adjustment": {
+          "label": "动作微调",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{motion_adjustment}}"
+        },
+        "camera_motion": {
+          "label": "镜头运动强弱",
+          "type": "select",
+          "options": [
+            "静止/轻微晃动",
+            "中等运动",
+            "明显推拉/移动"
+          ],
+          "prompt_slot": "{{camera_motion}}"
+        },
+        "product_requirement": {
+          "label": "产品展示要求",
+          "type": "text",
+          "max_length": 200,
+          "prompt_slot": "{{product_requirement}}"
+        }
+      }
+    }
+  }
+}

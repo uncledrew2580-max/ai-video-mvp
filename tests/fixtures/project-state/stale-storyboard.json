@@ -1,0 +1,19 @@
+{
+  "projectState": {
+    "project_id": "proj_fixture_010",
+    "stage": "stale",
+    "stale": {
+      "storyboard": true
+    }
+  },
+  "projectFiles": {
+    "confirmedScriptContext": "confirmed_script_context_proj_fixture_010.json",
+    "reviewContexts": [
+      "review_context_proj_fixture_010_001.json"
+    ],
+    "expectedVideoClipCount": 6,
+    "videoClipCount": 6,
+    "finalVideo": "final_proj_fixture_010.mp4"
+  }
+}
+

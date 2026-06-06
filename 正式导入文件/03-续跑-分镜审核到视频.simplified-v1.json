@@ -1,0 +1,849 @@
+{
+  "id": "reviewSubmitVeoV2",
+  "name": "TikTok续跑｜分镜审核→视频生成",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "storyboard-review-submit-v2",
+        "responseMode": "onReceived",
+        "options": {
+          "noResponseBody": true,
+          "responseCode": {
+            "values": {
+              "responseCode": 204
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -900,
+        120
+      ],
+      "id": "review-submit-webhook-v2",
+      "name": "review_submit_resume"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json || {};\nconst body = row.body && typeof row.body === 'object' ? row.body : row;\nfunction normalizeShotToken(v) {\n  const raw = String(v || '').trim();\n  if (!raw) return '';\n  if (/^shot[_-]?\\d+$/i.test(raw)) {\n    const num = raw.match(/(\\d+)/)?.[1] || '';\n    return num ? 'shot_' + num : raw;\n  }\n  if (/^\\d+$/.test(raw)) return 'shot_' + raw;\n  return raw;\n}\nconst normalizedBadShotIds = String(body.bad_shot_ids ?? body['需重做镜头编号'] ?? '')\n  .split(/[\\n,，\\s]+/)\n  .map(normalizeShotToken)\n  .filter(Boolean);\nreturn [{\n  json: {\n    ...body,\n    review_decision: body.review_decision ?? body['确认结论'] ?? body.decision ?? '',\n    bad_shot_ids: normalizedBadShotIds.join(','),\n    bad_shot_ids_list: normalizedBadShotIds,\n    review_feedback: body.review_feedback ?? body['修改意见'] ?? '',\n    review_round_hidden: body.review_round_hidden ?? body.review_round ?? 1,\n    review_context_path_hidden: body.review_context_path_hidden ?? body.review_context_path ?? '',\n    project_id: body.project_id || '',\n    product_name: body.product_name || '',\n    rerun_failed_only: body.rerun_failed_only === true || String(body.rerun_failed_only || '').trim() === '1',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        120
+      ],
+      "id": "review-submit-normalize-v2",
+      "name": "review_submit_normalize"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst row = $input.first().json || {};\n\nfunction normalizeDecision(v) {\n  const s = String(v || '').trim().toLowerCase();\n  if (!s) return true;\n  if (s.includes('重做') || s.includes('redo') || s.includes('reject') || s.includes('revise')) return false;\n  if (s.includes('通过') || s.includes('approve') || s.includes('pass') || s === 'ok' || s === 'yes' || s === 'y') return true;\n  return true;\n}\n\nfunction normalizeShotToken(v) {\n  const raw = String(v || '').trim();\n  if (!raw) return '';\n  if (/^shot[_-]?\\d+$/i.test(raw)) {\n    const num = raw.match(/(\\d+)/)?.[1] || '';\n    return num ? 'shot_' + num : raw;\n  }\n  if (/^\\d+$/.test(raw)) return 'shot_' + raw;\n  return raw;\n}\nfunction normalizeReviewContextPath(contextPath) {\n  let normalized = String(contextPath || '').trim();\n  while (normalized.endsWith('.submitted.json')) {\n    normalized = normalized.slice(0, -'.submitted.json'.length);\n  }\n  return normalized;\n}\n\n\nconst rerunFailedOnly = !!row.rerun_failed_only;\nconst rerunPendingOnly = !!row.rerun_pending_only;\nconst decisionValue = row.review_decision ?? row['确认结论'] ?? row.decision ?? '';\nconst approved = rerunFailedOnly ? true : normalizeDecision(decisionValue);\nconst badShotIds = String(row.bad_shot_ids ?? row['需重做镜头编号'] ?? '')\n  .split(/[\\n,，\\s]+/)\n  .map(normalizeShotToken)\n  .filter(Boolean);\nconst feedback = String(row.review_feedback ?? row['修改意见'] ?? '').trim();\nconst currentRound = Number(row.review_round || row['review_round_hidden'] || 1);\nconst reviewContextPath = normalizeReviewContextPath(row.review_context_path || row['review_context_path_hidden'] || '');\nlet reviewContext = {};\n\nif (reviewContextPath) {\n  if (!fs.existsSync(reviewContextPath)) {\n    throw new Error('解析用户确认：确认上下文文件不存在 ' + reviewContextPath);\n  }\n  try {\n    reviewContext = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8'));\n  } catch (e) {\n    throw new Error('解析用户确认：确认上下文文件不是合法 JSON，详情：' + e.message);\n  }\n}\n\nlet panels = Array.isArray(reviewContext.panel_review_pack) ? reviewContext.panel_review_pack : [];\nconst projectId = row.project_id || reviewContext.project_id || '';\nconst progressPath = projectId\n  ? path.join(require('path').join(require('os').homedir(), 'Downloads', 'tiktok-n8n-workflow-pack'), '.n8n-local-cache', 'review-progress', 'review_progress_' + String(projectId).replace(/[^a-zA-Z0-9_-]+/g, '_') + '.json')\n  : '';\nlet progress = {};\nif (progressPath && fs.existsSync(progressPath)) {\n  try {\n    progress = JSON.parse(fs.readFileSync(progressPath, 'utf8'));\n  } catch (e) {}\n}\n\nif (rerunFailedOnly) {\n  const failedShots = Array.isArray(progress.shots)\n    ? progress.shots.filter((shot) => String(shot.status || '') === 'failed')\n    : [];\n  if (!failedShots.length) {\n    throw new Error('只重跑失败镜头：当前没有可重跑的失败镜头');\n  }\n  const failedIdSet = new Set(failedShots.map((shot) => String(shot.shot_id)));\n  const failedOrderSet = new Set(failedShots.map((shot) => String(shot.shot_order)));\n  const shotStateMap = new Map(failedShots.map((shot) => [String(shot.shot_id), shot]));\n  panels = panels\n    .filter((panel) => failedIdSet.has(String(panel.shot_id)) || failedOrderSet.has(String(panel.shot_order)))\n    .map((panel) => {\n      const shotState = shotStateMap.get(String(panel.shot_id)) || {};\n      return {\n        ...panel,\n        veo_fail_streak: Number(shotState.veo_fail_streak || panel.veo_fail_streak || 0),\n        veo_prompt_regen_count: Number(shotState.veo_prompt_regen_count || panel.veo_prompt_regen_count || 0),\n        veo_generation_attempt_total: Number(shotState.veo_generation_attempt_total || panel.veo_generation_attempt_total || 0),\n        veo_failure_history: Array.isArray(shotState.veo_failure_history) ? shotState.veo_failure_history : (Array.isArray(panel.veo_failure_history) ? panel.veo_failure_history : []),\n      };\n    });\n  if (!panels.length) {\n    throw new Error('只重跑失败镜头：失败镜头未能在 review_context 中匹配到对应 panel');\n  }\n}\n\nif (rerunPendingOnly) {\n  const pendingShots = Array.isArray(progress.shots)\n    ? progress.shots.filter((shot) => String(shot.status || 'pending') === 'pending')\n    : [];\n  if (!pendingShots.length) {\n    throw new Error('继续生成剩余镜头：当前没有待生成镜头');\n  }\n  const pendingIdSet = new Set(pendingShots.map((shot) => String(shot.shot_id)));\n  const pendingOrderSet = new Set(pendingShots.map((shot) => String(shot.shot_order)));\n  const shotStateMap = new Map(pendingShots.map((shot) => [String(shot.shot_id), shot]));\n  panels = panels\n    .filter((panel) => pendingIdSet.has(String(panel.shot_id)) || pendingOrderSet.has(String(panel.shot_order)))\n    .map((panel) => {\n      const shotState = shotStateMap.get(String(panel.shot_id)) || {};\n      return {\n        ...panel,\n        veo_fail_streak: Number(shotState.veo_fail_streak || panel.veo_fail_streak || 0),\n        veo_prompt_regen_count: Number(shotState.veo_prompt_regen_count || panel.veo_prompt_regen_count || 0),\n        veo_generation_attempt_total: Number(shotState.veo_generation_attempt_total || panel.veo_generation_attempt_total || 0),\n        veo_failure_history: Array.isArray(shotState.veo_failure_history) ? shotState.veo_failure_history : (Array.isArray(panel.veo_failure_history) ? panel.veo_failure_history : []),\n      };\n    });\n  if (!panels.length) {\n    throw new Error('继续生成剩余镜头：待生成镜头未能在 review_context 中匹配到对应 panel');\n  }\n}\n\nreturn [{\n  json: {\n    ...reviewContext,\n    ...row,\n    project_id: projectId,\n    product_name: row.product_name || reviewContext.product_name || '',\n    panel_review_pack: panels,\n    review_context_path: reviewContextPath || normalizeReviewContextPath(reviewContext.review_context_path || '') || '',\n    review_approved: approved,\n    review_feedback: feedback,\n    bad_shot_ids: badShotIds.join(','),\n    bad_shot_ids_list: badShotIds,\n    review_round: approved ? currentRound : currentRound + 1,\n    previous_review_round: currentRound,\n    manual_regeneration_requested: !approved,\n    rerun_failed_only: rerunFailedOnly,\n    rerun_pending_only: rerunPendingOnly,\n    review_progress_path: progressPath,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -380,
+        20
+      ],
+      "id": "5cg43fe2-a8d6-413a-b0cd-b69g2ad73503",
+      "name": "解析用户确认"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "review-approved-check",
+              "leftValue": "={{ $json.review_approved }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        },
+        "looseTypeValidation": false
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -120,
+        20
+      ],
+      "id": "6dh54gf3-b9e7-424b-c1de-c7ah3be84604",
+      "name": "分镜确认通过?"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const fs = require('fs');\n\nconst row = $input.first().json || {};\n\nfunction normalizeReviewContextPath(contextPath) {\n  let normalized = String(contextPath || '').trim();\n  while (normalized.endsWith('.submitted.json')) {\n    normalized = normalized.slice(0, -'.submitted.json'.length);\n  }\n  return normalized;\n}\n\nlet panels = Array.isArray(row.panel_review_pack) ? row.panel_review_pack : [];\nconst reviewContextPath = normalizeReviewContextPath(row.review_context_path || row.review_context_path_hidden || '');\n\nif (!panels.length && reviewContextPath && fs.existsSync(reviewContextPath)) {\n  try {\n    const ctx = JSON.parse(fs.readFileSync(reviewContextPath, 'utf8'));\n    if (Array.isArray(ctx.panel_review_pack)) {\n      panels = ctx.panel_review_pack;\n    }\n  } catch (e) {\n    throw new Error('恢复已确认分镜：无法读取确认上下文，详情：' + e.message);\n  }\n}\n\nif (!panels.length) {\n  throw new Error('恢复已确认分镜：panel_review_pack 为空');\n}\n\nreturn panels.map((panel) => {\n  const imagePath = panel.panel_image_path || '';\n  if (!imagePath || !fs.existsSync(imagePath)) {\n    throw new Error('恢复已确认分镜失败：本地图片不存在 ' + imagePath);\n  }\n  const b64 = fs.readFileSync(imagePath).toString('base64');\n  const mimeType = panel.panel_mime_type || 'image/jpeg';\n  const fileName = panel.panel_file_name || 'panel.jpg';\n  return {\n    json: {\n      ...panel,\n      review_round: row.previous_review_round || row.review_round || panel.review_round || 1,\n      review_approved: true,\n      final_confirmation_status: 'approved',\n      project_id: row.project_id || panel.project_id || '',\n      product_name: row.product_name || panel.product_name || '',\n      target_market: row.target_market || panel.target_market || '',\n      target_language: row.target_language || panel.target_language || '',\n      creative_task_type: row.creative_task_type || panel.creative_task_type || '',\n      selected_concept_id: row.selected_concept_id || panel.selected_concept_id || '',\n      review_progress_path: row.review_progress_path || '',\n      review_context_path: reviewContextPath || row.review_context_path || '',\n      total_panels: Number(row.total_panels || panels.length || 0),\n      veo_prompt_original: panel.video_prompt || '',\n      veo_fail_streak: Number(panel.veo_fail_streak || 0),\n      veo_prompt_regen_count: Number(panel.veo_prompt_regen_count || 0),\n      veo_generation_attempt_total: Number(panel.veo_generation_attempt_total || 0),\n      veo_failure_history: Array.isArray(panel.veo_failure_history) ? panel.veo_failure_history : [],\n      continuity_requirements: panel.continuity_requirements || '',\n    },\n    binary: {\n      panel_9x16: {\n        data: b64,\n        mimeType,\n        fileName,\n      },\n    },\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        140,
+        -40
+      ],
+      "id": "7ei65hg4-caf8-435c-d2ef-d8bi4cf95705",
+      "name": "恢复已确认分镜"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json || {};\n\nreturn [\n  {\n    json: {\n      project_id: row.project_id || '',\n      product_name: row.product_name || '',\n      review_round: Number(row.review_round || 1),\n      previous_review_round: Number(row.previous_review_round || 1),\n      review_feedback: row.review_feedback || '',\n      bad_shot_ids: row.bad_shot_ids || '',\n      bad_shot_ids_list: Array.isArray(row.bad_shot_ids_list) ? row.bad_shot_ids_list : [],\n      manual_regeneration_requested: true,\n      review_progress_path: row.review_progress_path || '',\n    },\n  },\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        140,
+        180
+      ],
+      "id": "8fj76ih5-dbg9-446d-e3fg-e9cj5dg06806",
+      "name": "准备重生成反馈"
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        400,
+        -40
+      ],
+      "id": "9gk87ji6-ech0-457e-f4gh-f0dk6eh17907",
+      "name": "Veo逐镜串行"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nreturn items.map((item) => {\n  const json = item.json || {};\n  const binary = item.binary || {};\n  const panel = binary.panel_9x16 || {};\n  const imageBase64 = panel.data || '';\n  const mimeType = panel.mimeType || json.panel_mime_type || 'image/jpeg';\n\n  if (!imageBase64) {\n    throw new Error('ModelHub图片准备：缺少 panel_9x16 二进制图片，shot_id=' + (json.shot_id || ''));\n  }\n\n  return {\n    json: {\n      ...json,\n      scene_image_mime_type: mimeType,\n      video_provider: 'modelhub',\n      video_model: 'veo3.1-fast',\n      modelhub_submit_url: 'https://api.modelhub.me/v1/videos',\n      modelhub_result_url_template: 'https://api.modelhub.me/v1/videos/{request_id}',\n      modelhub_aspect_ratio: '9:16',\n      modelhub_enhance_prompt: true,\n      poll_wait_seconds: 20,\n      max_poll_attempts: 60,\n      poll_attempt: 0,\n    },\n    binary,\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -40
+      ],
+      "id": "7e253647-589a-abcd-789a-bcdef1234567",
+      "name": "Veo图片上传元数据"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst items = $input.all();\nconst out = [];\n\nfor (const item of items) {\n  const json = item.json || {};\n  const imagePath = String(json.panel_image_path || '').trim();\n  const binary = item.binary || {};\n  const panel = binary.panel_9x16 || {};\n  let imageBase64 = panel.data || '';\n  let mimeType = panel.mimeType || json.scene_image_mime_type || json.panel_mime_type || 'image/jpeg';\n\n  if (!imagePath || !fs.existsSync(imagePath)) {\n    throw new Error('ModelHub请求体组装：panel_image_path 不存在，shot_id=' + (json.shot_id || '') + '，path=' + imagePath);\n  }\n  if (!imageBase64) {\n    imageBase64 = fs.readFileSync(imagePath).toString('base64');\n    const ext = path.extname(imagePath).toLowerCase();\n    if (!panel.mimeType && !json.scene_image_mime_type && !json.panel_mime_type) {\n      mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';\n    }\n  }\n\n  const prompt = String(json.video_prompt || json.veo_prompt || '').trim();\n  if (!prompt) {\n    throw new Error('ModelHub请求体组装：缺少 video_prompt，shot_id=' + (json.shot_id || ''));\n  }\n\n  out.push({\n    json: {\n      ...json,\n      video_provider: 'modelhub',\n      video_model: json.video_model || 'veo3.1-fast',\n      modelhub_submit_url: json.modelhub_submit_url || 'https://api.modelhub.me/v1/videos',\n      modelhub_result_url_template: json.modelhub_result_url_template || 'https://api.modelhub.me/v1/videos/{request_id}',\n      modelhub_aspect_ratio: json.modelhub_aspect_ratio || '9:16',\n      modelhub_enhance_prompt: json.modelhub_enhance_prompt !== false,\n      modelhub_image_source: 'panel_9x16_binary_from_' + imagePath,\n      modelhub_request_preview: {\n        model: json.video_model || 'veo3.1-fast',\n        aspect_ratio: json.modelhub_aspect_ratio || '9:16',\n        enhance_prompt: json.modelhub_enhance_prompt !== false,\n        images_count: 1,\n        image_mime_type: mimeType,\n        prompt_chars: prompt.length,\n      },\n      poll_wait_seconds: Number(json.poll_wait_seconds || 20),\n      max_poll_attempts: Number(json.max_poll_attempts || 60),\n      poll_attempt: 0,\n      request_id: '',\n      result_get_url: '',\n      veo_operation_name: '',\n      veo_submit_response: {},\n      modelhub_submit_response: {},\n      submit_status: '',\n      veo_status_response: {},\n      modelhub_status: '',\n      wavespeed_status: '',\n      veo_done: false,\n      veo_video_uri: '',\n      modelhub_timeout: false,\n      modelhub_failed: false,\n      wavespeed_timeout: false,\n      wavespeed_failed: false,\n      veo_failure_reason: '',\n      veo_video_failed: false,\n      scene_image_url: '',\n      data: undefined,\n      code: undefined,\n      message: undefined,\n    },\n    binary,\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        -40
+      ],
+      "id": "e5f6a7b8-c9d0-1234-ef01-34567890abcd",
+      "name": "Veo请求体组装"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst { execFileSync } = require('child_process');\n\nfunction getModelHubApiKey() {\n  let key = '';\n  try {\n    key = String(fs.readFileSync(require('path').join(require('os').homedir(), '.n8n', 'modelhub-api-key'), 'utf8') || '').trim();\n  } catch (error) {}\n  if (!key) {\n    try {\n      const env = require('process').env || {};\n      key = String(env.MODELHUB_API_KEY || '').trim();\n    } catch (error) {}\n  }\n  if (!key) {\n    throw new Error('缺少 ModelHub API Key。请把 key 写入 ~/.n8n/modelhub-api-key，或设置 MODELHUB_API_KEY 环境变量。');\n  }\n  return key;\n}\n\nfunction runCurl(args, label) {\n  let lastError = null;\n  for (let attempt = 1; attempt <= 3; attempt++) {\n    try {\n      return execFileSync('curl', ['-sS', '--connect-timeout', '30', '--max-time', '300', '--retry', '1', '--retry-delay', '3', ...args], { encoding: 'utf8' });\n    } catch (error) {\n      lastError = error;\n      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, attempt * 2000);\n    }\n  }\n  throw new Error(label + ' 连续重试失败：' + String(lastError?.stderr || lastError?.message || lastError || '').slice(0, 800));\n}\n\nfunction parseJson(output, label) {\n  const text = String(output || '').trim();\n  try {\n    return JSON.parse(text || '{}');\n  } catch (firstError) {\n    const objects = [];\n    let depth = 0;\n    let start = -1;\n    let inString = false;\n    let escape = false;\n    for (let i = 0; i < text.length; i++) {\n      const ch = text[i];\n      if (inString) {\n        if (escape) escape = false;\n        else if (ch === '\\\\') escape = true;\n        else if (ch === '\"') inString = false;\n        continue;\n      }\n      if (ch === '\"') {\n        inString = true;\n        continue;\n      }\n      if (ch === '{') {\n        if (depth === 0) start = i;\n        depth++;\n      } else if (ch === '}') {\n        depth--;\n        if (depth === 0 && start >= 0) {\n          const candidate = text.slice(start, i + 1);\n          try { objects.push(JSON.parse(candidate)); } catch (error) {}\n          start = -1;\n        }\n      }\n    }\n    if (objects.length) return objects[objects.length - 1];\n    throw new Error(label + ' 返回不是合法 JSON：' + firstError.message + '，body=' + text.slice(0, 500));\n  }\n}\n\nconst key = getModelHubApiKey();\nconst items = $input.all();\nconst out = [];\n\nfor (const item of items) {\n  const json = item.json || {};\n  const binary = item.binary || {};\n  const panel = binary.panel_9x16 || {};\n  let imageBase64 = panel.data || '';\n  let mimeType = panel.mimeType || json.scene_image_mime_type || json.panel_mime_type || 'image/jpeg';\n  const prompt = String(json.video_prompt || json.veo_prompt || '').trim();\n\n  if (!imageBase64) {\n    const imagePath = String(json.panel_image_path || '').trim();\n    if (!imagePath || !fs.existsSync(imagePath)) throw new Error('ModelHub提交：缺少 panel_9x16 二进制图片，且 panel_image_path 不存在，shot_id=' + (json.shot_id || ''));\n    imageBase64 = fs.readFileSync(imagePath).toString('base64');\n    const ext = require('path').extname(imagePath).toLowerCase();\n    if (!panel.mimeType && !json.scene_image_mime_type && !json.panel_mime_type) {\n      mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';\n    }\n  }\n  if (!prompt) throw new Error('ModelHub提交：缺少 video_prompt，shot_id=' + (json.shot_id || ''));\n\n  const body = {\n    prompt: prompt.slice(0, 4000),\n    model: json.video_model || 'veo3.1-fast',\n    enhance_prompt: json.modelhub_enhance_prompt !== false,\n    images: ['data:' + mimeType + ';base64,' + imageBase64],\n    aspect_ratio: json.modelhub_aspect_ratio || '9:16',\n  };\n\n  const output = runCurl([\n    '--location',\n    '--request', 'POST',\n    json.modelhub_submit_url || 'https://api.modelhub.me/v1/videos',\n    '--header', 'Authorization: Bearer ' + key,\n    '--header', 'Content-Type: application/json',\n    '--data-raw', JSON.stringify(body),\n  ], 'ModelHub视频提交');\n\n  const parsed = parseJson(output, 'ModelHub视频提交');\n  out.push({\n    json: {\n      ...json,\n      modelhub_submit_response: parsed,\n      veo_submit_response: parsed,\n      submit_status: String(parsed.status || parsed?.data?.status || parsed?.state || '').trim(),\n      modelhub_request_preview: {\n        ...(json.modelhub_request_preview || {}),\n        submitted_at: new Date().toISOString(),\n      },\n      data: parsed.data,\n      code: parsed.code,\n      message: parsed.message,\n    },\n    binary,\n  });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        -40
+      ],
+      "id": "d4e5f6a7-b8c9-0123-def0-234567890abc",
+      "name": "逐镜视频_API_占位"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction firstString(...values) {\n  for (const value of values) {\n    if (value == null) continue;\n    const s = String(value).trim();\n    if (s) return s;\n  }\n  return '';\n}\n\nfunction findVideoUrl(value, depth = 0, seen = new Set()) {\n  if (!value || depth > 8) return '';\n  if (typeof value === 'string') {\n    return /^https?:\\/\\//i.test(value) && (/\\.(mp4|mov|webm)(\\?|#|$)/i.test(value) || /video|output|download|oss|aliyuncs/i.test(value)) ? value : '';\n  }\n  if (typeof value !== 'object') return '';\n  if (seen.has(value)) return '';\n  seen.add(value);\n  if (Array.isArray(value)) {\n    for (const entry of value) {\n      const found = findVideoUrl(entry, depth + 1, seen);\n      if (found) return found;\n    }\n    return '';\n  }\n  for (const key of ['video_url', 'videoUrl', 'download_url', 'downloadUrl', 'output_url', 'outputUrl', 'url']) {\n    const found = findVideoUrl(value[key], depth + 1, seen);\n    if (found) return found;\n  }\n  for (const key of ['videos', 'outputs', 'output', 'result', 'data', 'metadata']) {\n    const found = findVideoUrl(value[key], depth + 1, seen);\n    if (found) return found;\n  }\n  for (const entry of Object.values(value)) {\n    const found = findVideoUrl(entry, depth + 1, seen);\n    if (found) return found;\n  }\n  return '';\n}\n\nreturn items.map((item) => {\n  const row = item.json || {};\n  const response = row.modelhub_submit_response || row.veo_submit_response || row;\n  const data = response.data || {};\n  const videoUrl = findVideoUrl(response);\n  let requestId = firstString(\n    row.request_id,\n    response.id,\n    data.id,\n    response.task_id,\n    data.task_id,\n    response.request_id,\n    data.request_id,\n    response.video_id,\n    data.video_id,\n    response.operation_name,\n    data.operation_name,\n  );\n  if (!requestId && videoUrl) requestId = 'modelhub_sync_' + Date.now();\n  if (!requestId) {\n    throw new Error('ModelHub未返回任务 ID，无法轮询。返回摘要：' + JSON.stringify(response).slice(0, 1000));\n  }\n\n  const resultUrl = firstString(\n    row.result_get_url,\n    response.result_url,\n    data.result_url,\n    response.status_url,\n    data.status_url,\n    (row.modelhub_result_url_template || 'https://api.modelhub.me/v1/videos/{request_id}').replace('{request_id}', encodeURIComponent(requestId)),\n  );\n\n  return {\n    json: {\n      ...row,\n      request_id: requestId,\n      veo_operation_name: requestId,\n      result_get_url: resultUrl,\n      modelhub_status: firstString(response.status, data.status, response.state, data.state, row.submit_status, videoUrl ? 'completed' : 'submitted'),\n      wavespeed_status: firstString(response.status, data.status, response.state, data.state, row.submit_status, videoUrl ? 'completed' : 'submitted'),\n      veo_video_uri: videoUrl || row.veo_video_uri || '',\n      data: undefined,\n      code: undefined,\n      message: undefined,\n    },\n    binary: item.binary || {},\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        -40
+      ],
+      "id": "07b8c9d0-e1f2-3456-0123-567890abcdef",
+      "name": "Veo提取任务ID"
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 15,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1700,
+        -40
+      ],
+      "id": "18c9d0e1-f203-4567-1234-67890abcdef1",
+      "name": "Veo轮询等待"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst { execFileSync } = require('child_process');\n\nfunction getModelHubApiKey() {\n  let key = '';\n  try {\n    key = String(fs.readFileSync(require('path').join(require('os').homedir(), '.n8n', 'modelhub-api-key'), 'utf8') || '').trim();\n  } catch (error) {}\n  if (!key) {\n    try {\n      const env = require('process').env || {};\n      key = String(env.MODELHUB_API_KEY || '').trim();\n    } catch (error) {}\n  }\n  if (!key) {\n    throw new Error('缺少 ModelHub API Key。请把 key 写入 ~/.n8n/modelhub-api-key，或设置 MODELHUB_API_KEY 环境变量。');\n  }\n  return key;\n}\n\nfunction runCurl(args, label) {\n  let lastError = null;\n  for (let attempt = 1; attempt <= 3; attempt++) {\n    try {\n      return execFileSync('curl', ['-sS', '--connect-timeout', '30', '--max-time', '180', '--retry', '1', '--retry-delay', '3', ...args], { encoding: 'utf8' });\n    } catch (error) {\n      lastError = error;\n      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, attempt * 2000);\n    }\n  }\n  throw new Error(label + ' 连续重试失败：' + String(lastError?.stderr || lastError?.message || lastError || '').slice(0, 800));\n}\n\nfunction parseJson(output, label) {\n  const text = String(output || '').trim();\n  try {\n    return JSON.parse(text || '{}');\n  } catch (firstError) {\n    const objects = [];\n    let depth = 0;\n    let start = -1;\n    let inString = false;\n    let escape = false;\n    for (let i = 0; i < text.length; i++) {\n      const ch = text[i];\n      if (inString) {\n        if (escape) escape = false;\n        else if (ch === '\\\\') escape = true;\n        else if (ch === '\"') inString = false;\n        continue;\n      }\n      if (ch === '\"') {\n        inString = true;\n        continue;\n      }\n      if (ch === '{') {\n        if (depth === 0) start = i;\n        depth++;\n      } else if (ch === '}') {\n        depth--;\n        if (depth === 0 && start >= 0) {\n          const candidate = text.slice(start, i + 1);\n          try { objects.push(JSON.parse(candidate)); } catch (error) {}\n          start = -1;\n        }\n      }\n    }\n    if (objects.length) return objects[objects.length - 1];\n    throw new Error(label + ' 返回不是合法 JSON：' + firstError.message + '，body=' + text.slice(0, 500));\n  }\n}\n\nconst key = getModelHubApiKey();\nconst items = $input.all();\nconst out = [];\n\nfor (const item of items) {\n  const row = item.json || {};\n  if (row.veo_video_uri) {\n    out.push({ json: { ...row, modelhub_status_response: { status: 'completed', video_url: row.veo_video_uri } }, binary: item.binary || {} });\n    continue;\n  }\n  const url = String(row.result_get_url || '').trim();\n  if (!url) throw new Error('ModelHub轮询：缺少 result_get_url，request_id=' + (row.request_id || ''));\n\n  const output = runCurl([\n    '--location',\n    '--request', 'GET',\n    url,\n    '--header', 'Authorization: Bearer ' + key,\n    '--header', 'Content-Type: application/json',\n  ], 'ModelHub任务查询');\n  const parsed = parseJson(output, 'ModelHub任务查询');\n  out.push({ json: { ...row, modelhub_status_response: parsed, veo_status_response: parsed, data: parsed.data, code: parsed.code, message: parsed.message }, binary: item.binary || {} });\n}\n\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        -40
+      ],
+      "id": "29d0e1f2-0345-5678-2345-7890abcdef12",
+      "name": "Veo查询任务状态"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nfunction firstString(...values) {\n  for (const value of values) {\n    if (value == null) continue;\n    const s = String(value).trim();\n    if (s) return s;\n  }\n  return '';\n}\n\nfunction findVideoUrl(value, depth = 0, seen = new Set()) {\n  if (!value || depth > 8) return '';\n  if (typeof value === 'string') {\n    return /^https?:\\/\\//i.test(value) && (/\\.(mp4|mov|webm)(\\?|#|$)/i.test(value) || /video|output|download|oss|aliyuncs/i.test(value)) ? value : '';\n  }\n  if (typeof value !== 'object') return '';\n  if (seen.has(value)) return '';\n  seen.add(value);\n  if (Array.isArray(value)) {\n    for (const entry of value) {\n      const found = findVideoUrl(entry, depth + 1, seen);\n      if (found) return found;\n    }\n    return '';\n  }\n  for (const key of ['video_url', 'videoUrl', 'download_url', 'downloadUrl', 'output_url', 'outputUrl', 'url']) {\n    const found = findVideoUrl(value[key], depth + 1, seen);\n    if (found) return found;\n  }\n  for (const key of ['videos', 'outputs', 'output', 'result', 'data', 'metadata']) {\n    const found = findVideoUrl(value[key], depth + 1, seen);\n    if (found) return found;\n  }\n  for (const entry of Object.values(value)) {\n    const found = findVideoUrl(entry, depth + 1, seen);\n    if (found) return found;\n  }\n  return '';\n}\n\nfunction normalizeStatus(status, hasVideo) {\n  const s = String(status || '').trim().toLowerCase();\n  if (hasVideo) return 'completed';\n  if (['completed', 'complete', 'succeeded', 'success', 'done', 'finished'].includes(s)) return 'completed';\n  if (['failed', 'failure', 'error', 'errored', 'cancelled', 'canceled'].includes(s)) return 'failed';\n  if (['queued', 'pending', 'running', 'processing', 'submitted', 'created', 'in_progress'].includes(s)) return s || 'running';\n  return s || 'running';\n}\n\nreturn items.map((item) => {\n  const row = item.json || {};\n  const submitRow = (() => {\n    try {\n      return $('Veo提取任务ID').first().json || {};\n    } catch (e) {\n      return {};\n    }\n  })();\n  const response = row.modelhub_status_response || row.veo_status_response || row;\n  const data = response.data || {};\n  const requestId = row.request_id || submitRow.request_id || data.id || response.id || '';\n  const resultGetUrl = row.result_get_url || submitRow.result_get_url || '';\n  const maxPollAttempts = Number(row.max_poll_attempts || submitRow.max_poll_attempts || 60);\n  const previousAttempt = Number(row.poll_attempt || submitRow.poll_attempt || 0);\n  const nextAttempt = previousAttempt + 1;\n  const videoUrl = findVideoUrl(response) || row.veo_video_uri || '';\n  const rawStatus = firstString(response.status, data.status, response.state, data.state, row.modelhub_status, row.wavespeed_status);\n  const status = normalizeStatus(rawStatus, Boolean(videoUrl));\n  const isTerminal = ['completed', 'failed'].includes(status);\n  const isTimeout = !isTerminal && nextAttempt >= maxPollAttempts;\n  const errorMessage = firstString(response.error, data.error, response.message, data.message, response.reason, data.reason);\n\n  return {\n    json: {\n      ...submitRow,\n      ...row,\n      request_id: requestId,\n      result_get_url: resultGetUrl,\n      max_poll_attempts: maxPollAttempts,\n      veo_status_response: response,\n      modelhub_status_response: response,\n      modelhub_status: status,\n      wavespeed_status: status,\n      veo_done: isTerminal || isTimeout,\n      veo_video_uri: videoUrl,\n      poll_attempt: nextAttempt,\n      modelhub_timeout: isTimeout,\n      wavespeed_timeout: isTimeout,\n      modelhub_failed: status === 'failed',\n      wavespeed_failed: status === 'failed',\n      veo_failure_reason: isTimeout\n        ? 'ModelHub 轮询超时，超过 ' + maxPollAttempts + ' 次仍未完成'\n        : (status === 'failed' ? (errorMessage || 'ModelHub 返回 failed') : ''),\n      data: undefined,\n      code: undefined,\n      message: undefined,\n    },\n    binary: item.binary || {},\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        -40
+      ],
+      "id": "3ae1f203-1456-6789-3456-890abcdef123",
+      "name": "Veo解析任务状态"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "veo-done-check",
+              "leftValue": "={{ $json.veo_done }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        },
+        "looseTypeValidation": false
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2480,
+        -40
+      ],
+      "id": "4bf20314-2567-789a-4567-90abcdef1234",
+      "name": "Veo已完成?"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst { execFileSync } = require('child_process');\nconst { URL } = require('url');\n\nconst json = $json || {};\nconst binary = $binary || {};\nconst outputDir = require('path').join(require('os').homedir(), 'Downloads', 'n8n视频');\nconst progressDir = require('path').join(require('path').join(require('os').homedir(), 'Downloads', 'tiktok-n8n-workflow-pack'), '.n8n-local-cache', 'review-progress');\nfs.mkdirSync(outputDir, { recursive: true });\n\n// project_id 所有 shot 都一样，从 .first() 拿是安全的\nconst projectId = String(\n  $('恢复已确认分镜').first().json.project_id || json.project_id || 'proj'\n).replace(/[^a-zA-Z0-9_-]+/g, '_');\n\nconst progressPath = path.join(progressDir, 'review_progress_' + projectId + '.json');\n\n// 优先使用当前 item 的 shot_id，避免多次提交或并发执行时 progress.running 被抢占。\nlet currentShot = null;\nif (json.shot_id || json.shot_order) {\n  currentShot = { shot_id: json.shot_id || ('shot_' + (json.shot_order || 'x')), shot_order: json.shot_order || null };\n}\nif (!currentShot && fs.existsSync(progressPath)) {\n  try {\n    const progress = JSON.parse(fs.readFileSync(progressPath, 'utf8'));\n    currentShot = Array.isArray(progress.shots)\n      ? progress.shots.find(s => s.status === 'running')\n      : null;\n  } catch (e) {}\n}\n\nif (!currentShot) {\n  return {\n    json: {\n      ...json,\n      project_id: projectId,\n      shot_id: json.shot_id || 'unknown',\n      shot_order: json.shot_order || 0,\n      veo_video_failed: true,\n      veo_video_path: '',\n      review_progress_path: progressPath,\n      veo_failure_reason: 'Veo下载视频：progress 文件中找不到 running 状态的 shot，无法确认当前镜头归属',\n    },\n    binary,\n  };\n}\n\nconst shotId = String(currentShot.shot_id || ('shot_' + (currentShot.shot_order || 'x')));\nconst shotOrder = currentShot.shot_order != null ? currentShot.shot_order : null;\nconst videoUrl = String(json.veo_video_uri || '').trim();\nconst requestId = String(json.request_id || json.veo_operation_name || '');\nconst safeToken = (requestId.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 24)) || String(Date.now());\nconst providerPrefix = String(json.video_provider || 'modelhub').replace(/[^a-zA-Z0-9_-]+/g, '_') || 'modelhub';\nconst finalFileName = providerPrefix + '_' + projectId + '_' + shotId + '_' + safeToken + '.mp4';\nconst finalVideoPath = path.join(outputDir, finalFileName);\n\nif (json.modelhub_timeout || json.wavespeed_timeout) {\n  return {\n    json: {\n      ...json,\n      project_id: projectId,\n      shot_id: shotId,\n      shot_order: shotOrder,\n      veo_video_failed: true,\n      veo_video_path: '',\n      review_progress_path: progressPath,\n      veo_failure_reason: json.veo_failure_reason || 'ModelHub 轮询超时',\n    },\n    binary,\n  };\n}\n\nif (json.modelhub_failed || json.wavespeed_failed || !videoUrl) {\n  return {\n    json: {\n      ...json,\n      project_id: projectId,\n      shot_id: shotId,\n      shot_order: shotOrder,\n      veo_video_failed: true,\n      veo_video_path: '',\n      review_progress_path: progressPath,\n      veo_failure_reason: json.veo_failure_reason || 'ModelHub 未返回可下载的视频 URL',\n    },\n    binary,\n  };\n}\n\nfunction run(cmd, args) {\n  return execFileSync(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });\n}\n\nfunction resolveHostWithPublicDns(hostname) {\n  const servers = ['1.1.1.1', '8.8.8.8'];\n  for (const server of servers) {\n    try {\n      const stdout = execFileSync('dig', ['@' + server, '+short', hostname], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });\n      const ip = stdout.split(/\\r?\\n/).map(l => l.trim()).find(l => /^\\d+\\.\\d+\\.\\d+\\.\\d+$/.test(l) && !l.startsWith('127.'));\n      if (ip) return ip;\n    } catch (e) {}\n  }\n  return '';\n}\n\nfunction saveRemoteFile(url, targetPath) {\n  const parsed = new URL(url);\n  const host = parsed.hostname;\n  const baseArgs = ['-L', '-sS', '--connect-timeout', '12', '--max-time', '120', '--retry', '1', '--retry-delay', '2'];\n  const attempts = [];\n  const publicIp = resolveHostWithPublicDns(host);\n  if (publicIp) {\n    attempts.push([...baseArgs, '--resolve', host + ':443:' + publicIp, url, '-o', targetPath]);\n  }\n  attempts.push([...baseArgs, url, '-o', targetPath]);\n  let lastError = null;\n  for (const args of attempts) {\n    try {\n      run('curl', args);\n      if (fs.existsSync(targetPath) && fs.statSync(targetPath).size > 0) return;\n      lastError = new Error('curl 下载完成但文件为空');\n    } catch (e) {\n      lastError = e;\n    }\n  }\n  throw new Error('视频下载失败：' + String(lastError?.stderr || lastError?.message || lastError || '').slice(0, 1000));\n}\n\ntry {\n  saveRemoteFile(videoUrl, finalVideoPath);\n  return {\n    json: {\n      ...json,\n      project_id: projectId,\n      shot_id: shotId,\n      shot_order: shotOrder,\n      veo_video_failed: false,\n      veo_video_path: finalVideoPath,\n      review_progress_path: progressPath,\n      audio_mode: 'model_native_or_none',\n      voiceover_audio_path: '',\n      voiceover_text: '',\n      veo_failure_reason: '',\n    },\n    binary,\n  };\n} catch (error) {\n  return {\n    json: {\n      ...json,\n      project_id: projectId,\n      shot_id: shotId,\n      shot_order: shotOrder,\n      veo_video_failed: true,\n      veo_video_path: '',\n      review_progress_path: progressPath,\n      veo_failure_reason: '视频下载失败，shot_id=' + shotId + '，详情：' + (error.message || String(error)),\n    },\n    binary,\n  };\n}"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2740,
+        -140
+      ],
+      "id": "5c031425-3678-89ab-5678-0abcdef12345",
+      "name": "Veo下载视频"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\n\nconst row = $input.first().json || {};\nconst progressDir = require('path').join(require('path').join(require('os').homedir(), 'Downloads', 'tiktok-n8n-workflow-pack'), '.n8n-local-cache', 'review-progress');\nfs.mkdirSync(progressDir, { recursive: true });\n\nconst reviewContextPath = String(row.review_context_path || '').trim();\nconst projectId = String(row.project_id || 'proj').replace(/[^a-zA-Z0-9_-]+/g, '_');\nconst progressPath = path.join(progressDir, 'review_progress_' + projectId + '.json');\nconst panels = Array.isArray(row.panel_review_pack) ? row.panel_review_pack : [];\nconst totalPanels = Number(row.panel_count || row.total_panels || panels.length || 0);\nconst rerunFailedOnly = !!row.rerun_failed_only;\nconst rerunPendingOnly = !!row.rerun_pending_only;\n\nlet payload;\nif ((rerunFailedOnly || rerunPendingOnly) && fs.existsSync(progressPath)) {\n  payload = JSON.parse(fs.readFileSync(progressPath, 'utf8'));\n  const rerunKeys = new Set();\n  for (const panel of panels) {\n    const shotId = String(panel.shot_id || '').trim();\n    const shotOrder = String(panel.shot_order || '').trim();\n    if (shotId) rerunKeys.add(shotId);\n    if (shotOrder) rerunKeys.add(shotOrder);\n  }\n  payload.shots = Array.isArray(payload.shots) ? payload.shots : [];\n  payload.shots = payload.shots.map((shot) => {\n    const shotId = String(shot.shot_id || '').trim();\n    const shotOrder = String(shot.shot_order || '').trim();\n    if (!rerunKeys.has(shotId) && !rerunKeys.has(shotOrder)) return shot;\n    return {\n      ...shot,\n      status: 'pending',\n      operation_name: '',\n      video_path: rerunPendingOnly ? (shot.video_path || '') : '',\n      error: '',\n      last_started_at: '',\n    };\n  });\n  payload.review_context_path = reviewContextPath || payload.review_context_path || '';\n  payload.review_round = Number(row.review_round || payload.review_round || 1);\n  payload.submitted_at = new Date().toISOString();\n  payload.status = 'submitted';\n  payload.rerun_failed_only = rerunFailedOnly;\n  payload.rerun_pending_only = rerunPendingOnly;\n  payload.paused = false;\n} else {\n  const shots = panels.map((panel) => ({\n    shot_id: panel.shot_id || ('shot_' + (panel.shot_order || '')),\n    shot_order: panel.shot_order || null,\n    status: 'pending',\n    operation_name: '',\n    video_path: '',\n    error: '',\n    veo_fail_streak: Number(panel.veo_fail_streak || 0),\n    veo_prompt_regen_count: Number(panel.veo_prompt_regen_count || 0),\n    veo_generation_attempt_total: Number(panel.veo_generation_attempt_total || 0),\n    veo_failure_history: Array.isArray(panel.veo_failure_history) ? panel.veo_failure_history : [],\n  }));\n  payload = {\n    project_id: row.project_id || projectId,\n    product_name: row.product_name || '',\n    review_context_path: reviewContextPath,\n    review_round: Number(row.review_round || 1),\n    submitted_at: new Date().toISOString(),\n    total_panels: totalPanels,\n    completed_count: 0,\n    running_count: 0,\n    failed_count: 0,\n    status: row.review_approved ? 'submitted' : 'review_rejected',\n    shots,\n    rerun_failed_only: false,\n    rerun_pending_only: false,\n  };\n}\n\npayload.completed_count = (payload.shots || []).filter((shot) => shot.status === 'completed').length;\npayload.running_count = (payload.shots || []).filter((shot) => shot.status === 'running' || shot.status === 'submitted').length;\npayload.failed_count = (payload.shots || []).filter((shot) => shot.status === 'failed').length;\npayload.total_panels = Number(payload.total_panels || totalPanels || 0);\npayload.updated_at = new Date().toISOString();\nfs.writeFileSync(progressPath, JSON.stringify(payload, null, 2));\nreturn [{ json: { ...row, review_progress_path: progressPath, total_panels: payload.total_panels, rerun_failed_only: rerunFailedOnly, rerun_pending_only: rerunPendingOnly } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -380,
+        220
+      ],
+      "id": "review-progress-init-v1",
+      "name": "审核进度初始化"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\n\nconst item = $input.first();\nconst row = item.json || {};\nconst progressPath = String(row.review_progress_path || '').trim();\nif (progressPath && fs.existsSync(progressPath)) {\n  const progress = JSON.parse(fs.readFileSync(progressPath, 'utf8'));\n  const shotId = row.shot_id || ('shot_' + (row.shot_order || ''));\n  progress.shots = Array.isArray(progress.shots) ? progress.shots : [];\n  progress.shots = progress.shots.map((shot) => shot.shot_id === shotId ? { ...shot, status: 'running', error: '', last_started_at: new Date().toISOString() } : shot);\n  progress.completed_count = progress.shots.filter((shot) => shot.status === 'completed').length;\n  progress.running_count = progress.shots.filter((shot) => shot.status === 'running' || shot.status === 'submitted').length;\n  progress.failed_count = progress.shots.filter((shot) => shot.status === 'failed').length;\n  progress.status = 'running';\n  progress.updated_at = new Date().toISOString();\n  fs.writeFileSync(progressPath, JSON.stringify(progress, null, 2));\n}\nreturn [item];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -220
+      ],
+      "id": "veo-progress-start-v1",
+      "name": "Veo进度_开始分镜"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\n\nconst item = $input.first();\nconst row = item.json || {};\nconst progressPath = String(row.review_progress_path || '').trim();\nif (progressPath && fs.existsSync(progressPath)) {\n  const progress = JSON.parse(fs.readFileSync(progressPath, 'utf8'));\n  const shotId = row.shot_id || ('shot_' + (row.shot_order || ''));\n  progress.shots = Array.isArray(progress.shots) ? progress.shots : [];\n  progress.shots = progress.shots.map((shot) => shot.shot_id === shotId ? { ...shot, status: 'submitted', operation_name: row.veo_operation_name || shot.operation_name || '', error: '' } : shot);\n  progress.completed_count = progress.shots.filter((shot) => shot.status === 'completed').length;\n  progress.running_count = progress.shots.filter((shot) => shot.status === 'running' || shot.status === 'submitted').length;\n  progress.failed_count = progress.shots.filter((shot) => shot.status === 'failed').length;\n  progress.status = 'running';\n  progress.updated_at = new Date().toISOString();\n  fs.writeFileSync(progressPath, JSON.stringify(progress, null, 2));\n}\nreturn [item];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        -220
+      ],
+      "id": "veo-progress-submit-v1",
+      "name": "Veo进度_已提交任务"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\n\nconst item = $input.first();\nconst row = item.json || {};\nconst progressPath = String(row.review_progress_path || '').trim();\nif (progressPath && fs.existsSync(progressPath)) {\n  const progress = JSON.parse(fs.readFileSync(progressPath, 'utf8'));\n  const shotId = row.shot_id || ('shot_' + (row.shot_order || ''));\n  const failed = !!row.veo_video_failed || !row.veo_video_path;\n  progress.shots = Array.isArray(progress.shots) ? progress.shots : [];\n  progress.shots = progress.shots.map((shot) => shot.shot_id === shotId ? {\n    ...shot,\n    status: failed ? 'failed' : 'completed',\n    operation_name: row.veo_operation_name || shot.operation_name || '',\n    video_path: failed ? '' : (row.veo_video_path || shot.video_path || ''),\n    raw_video_path: row.raw_video_path || '',\n    voiceover_audio_path: row.voiceover_audio_path || '',\n    audio_mode: row.audio_mode || 'silent',\n    voiceover_text: row.voiceover_text || '',\n    completed_at: new Date().toISOString(),\n    error: failed ? String(row.veo_failure_reason || 'Veo 未返回视频文件').trim() : '',\n  } : shot);\n  progress.completed_count = progress.shots.filter((shot) => shot.status === 'completed').length;\n  progress.running_count = progress.shots.filter((shot) => shot.status === 'running' || shot.status === 'submitted').length;\n  progress.failed_count = progress.shots.filter((shot) => shot.status === 'failed').length;\n  const total = Number(progress.total_panels || 0);\n  progress.status = progress.completed_count >= total && total > 0 ? 'success' : (progress.failed_count > 0 ? 'partial_success' : 'running');\n  progress.updated_at = new Date().toISOString();\n  fs.writeFileSync(progressPath, JSON.stringify(progress, null, 2));\n}\nreturn [item];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3000,
+        -140
+      ],
+      "id": "veo-progress-finish-v1",
+      "name": "Veo进度_完成分镜"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst path = require('path');\nconst { execFileSync } = require('child_process');\n\nconst base = $('审核进度初始化').first().json || $('解析用户确认').first().json || {};\nconst progressPath = String(base.review_progress_path || '').trim();\nconst projectId = String(base.project_id || 'proj').trim();\nconst videoDir = require('path').join(require('os').homedir(), 'Downloads', 'n8n视频');\nconst concatDir = require('path').join(require('path').join(require('os').homedir(), 'Downloads', 'tiktok-n8n-workflow-pack'), '.n8n-local-cache', 'final-video');\nfs.mkdirSync(concatDir, { recursive: true });\n\nlet progress = {};\nif (progressPath && fs.existsSync(progressPath)) {\n  progress = JSON.parse(fs.readFileSync(progressPath, 'utf8'));\n}\n\nconst shots = Array.isArray(progress.shots) ? progress.shots : [];\nconst allVideoFiles = fs.existsSync(videoDir)\n  ? fs.readdirSync(videoDir)\n      .filter((name) => name.endsWith('.mp4') && (name.startsWith('modelhub_' + projectId + '_') || name.startsWith('wavespeed_' + projectId + '_')))\n      .map((name) => path.join(videoDir, name))\n      .sort((a, b) => fs.statSync(a).mtimeMs - fs.statSync(b).mtimeMs)\n  : [];\n\nconst fileByShot = new Map();\nfor (const filePath of allVideoFiles) {\n  const baseName = path.basename(filePath);\n  const prefixes = ['modelhub_' + projectId + '_', 'wavespeed_' + projectId + '_'];\n  const prefix = prefixes.find((p) => baseName.startsWith(p));\n  if (!prefix) continue;\n  const rest = baseName.slice(prefix.length);\n  const match = rest.match(/^(?:shot_)?(\\d+)_/);\n  if (match) fileByShot.set(String(Number(match[1])), filePath);\n}\n\nconst nowIso = new Date().toISOString();\nconst mergedShots = shots.map((shot) => {\n  const orderKey = String(Number(shot.shot_order || shot.shot_id || 0));\n  const existingVideoPath = String(shot.video_path || '').trim();\n  const detectedVideoPath = fileByShot.get(orderKey) || '';\n  const videoPath = existingVideoPath && fs.existsSync(existingVideoPath) ? existingVideoPath : detectedVideoPath;\n  if (videoPath && fs.existsSync(videoPath)) {\n    return {\n      ...shot,\n      status: 'completed',\n      video_path: videoPath,\n      error: '',\n      completed_at: shot.completed_at || nowIso,\n    };\n  }\n  if (shot.status === 'running' || shot.status === 'submitted') {\n    return { ...shot, status: 'pending' };\n  }\n  return shot;\n});\n\nconst completedShots = mergedShots\n  .filter((shot) => shot.status === 'completed')\n  .sort((a, b) => Number(a.shot_order || 0) - Number(b.shot_order || 0));\nconst failedShots = mergedShots\n  .filter((shot) => shot.status === 'failed')\n  .map((shot) => ({\n    shot_id: shot.shot_id,\n    shot_order: shot.shot_order,\n    operation_name: shot.operation_name || '',\n    error: shot.error || '',\n  }));\n\nconst completedCount = completedShots.length;\nconst failedCount = failedShots.length;\nconst runningCount = mergedShots.filter((shot) => shot.status === 'running' || shot.status === 'submitted').length;\nconst totalPanels = Number(progress.total_panels || base.total_panels || mergedShots.length || 0);\nconst rerunFailedOnly = Boolean(progress.rerun_failed_only || base.rerun_failed_only);\n\nlet status = 'running';\nif (completedCount >= totalPanels && totalPanels > 0) {\n  status = 'success';\n} else if (rerunFailedOnly && runningCount === 0 && failedCount === 0 && completedCount > 0) {\n  status = 'rerun_success';\n} else if (runningCount === 0 && failedCount > 0 && completedCount > 0) {\n  status = 'partial_success';\n} else if (runningCount === 0 && failedCount > 0) {\n  status = 'failed';\n} else if (runningCount === 0 && completedCount > 0) {\n  status = 'partial_success';\n}\n\nconst failureReasonsSummary = failedShots.map((shot) => String(shot.shot_id) + ': ' + shot.error).join(' | ');\nlet finalMergedVideoPath = String(progress.final_merged_video_path || '').trim();\nlet finalMergedVideoName = String(progress.final_merged_video_name || '').trim();\n\nif (status === 'success' && completedShots.length === totalPanels && totalPanels > 0) {\n  try {\n    const listPath = path.join(concatDir, 'concat_' + projectId + '.txt');\n    const mergedName = 'final_' + projectId + '_' + Date.now() + '.mp4';\n    const mergedPath = path.join(videoDir, mergedName);\n    const lines = completedShots.map((shot) => \"file '\" + String(shot.video_path || '').replace(/'/g, \"'\\\\''\") + \"'\");\n    fs.writeFileSync(listPath, lines.join('\\n') + '\\n');\n    execFileSync('ffmpeg', ['-y', '-f', 'concat', '-safe', '0', '-i', listPath, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-c:a', 'aac', '-movflags', '+faststart', mergedPath], { stdio: ['ignore', 'pipe', 'pipe'] });\n    if (fs.existsSync(mergedPath) && fs.statSync(mergedPath).size > 0) {\n      finalMergedVideoPath = mergedPath;\n      finalMergedVideoName = mergedName;\n    }\n  } catch (error) {\n    status = 'partial_success';\n    progress.final_merge_error = error.message;\n  }\n}\n\nconst nextProgress = {\n  ...progress,\n  shots: mergedShots,\n  total_panels: totalPanels,\n  completed_count: completedCount,\n  running_count: runningCount,\n  failed_count: failedCount,\n  status,\n  failure_reasons_summary: failureReasonsSummary,\n  video_files: completedShots.map((shot) => shot.video_path).filter(Boolean),\n  failed_shots: failedShots,\n  final_merged_video_path: finalMergedVideoPath,\n  final_merged_video_name: finalMergedVideoName,\n  updated_at: nowIso,\n  finished_at: runningCount === 0 ? nowIso : progress.finished_at || '',\n};\n\nif (progressPath) {\n  fs.writeFileSync(progressPath, JSON.stringify(nextProgress, null, 2));\n}\n\nreturn [{ json: nextProgress }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        260
+      ],
+      "id": "veo-summary-v1",
+      "name": "Veo结果汇总"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $input.first().json || {};\nconst history = Array.isArray(row.veo_failure_history) ? row.veo_failure_history : [];\n\nif (!row.veo_video_failed) {\n  return [{\n    json: {\n      ...row,\n      veo_recovery_action: 'success',\n      veo_fail_streak: 0,\n      veo_generation_attempt_total: Number(row.veo_generation_attempt_total || 0),\n      veo_failure_history: history,\n    },\n  }];\n}\n\nconst failStreak = Number(row.veo_fail_streak || 0) + 1;\nconst totalAttempts = Number(row.veo_generation_attempt_total || 0) + 1;\nconst promptRegens = Number(row.veo_prompt_regen_count || 0);\nconst failureEntry = {\n  at: new Date().toISOString(),\n  shot_id: row.shot_id || ('shot_' + (row.shot_order || 'x')),\n  shot_order: row.shot_order || null,\n  fail_streak: failStreak,\n  total_attempt: totalAttempts,\n  prompt_regen_count: promptRegens,\n  operation_name: row.veo_operation_name || '',\n  reason: String(row.veo_failure_reason || '').trim(),\n};\nlet action = 'retry_same_prompt';\nif (failStreak >= 3) {\n  action = promptRegens < 2 ? 'regenerate_prompt' : 'give_up';\n}\nreturn [{\n  json: {\n    ...row,\n    veo_recovery_action: action,\n    veo_fail_streak: failStreak,\n    veo_generation_attempt_total: totalAttempts,\n    veo_last_failure_reason: failureEntry.reason,\n    veo_failure_history: [...history, failureEntry],\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3260,
+        -140
+      ],
+      "id": "veo-fail-policy-v1",
+      "name": "Veo失败恢复策略"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "need-recovery",
+              "leftValue": "={{ $json.veo_recovery_action !== \"success\" && $json.veo_recovery_action !== \"give_up\" }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        },
+        "looseTypeValidation": false
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3520,
+        -140
+      ],
+      "id": "veo-need-recovery-v1",
+      "name": "Veo需要恢复?"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "need-rewrite",
+              "leftValue": "={{ $json.veo_recovery_action === \"regenerate_prompt\" }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {
+          "ignoreCase": true
+        },
+        "looseTypeValidation": false
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3780,
+        -140
+      ],
+      "id": "veo-need-rewrite-v1",
+      "name": "Veo重写提示词?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const fs = require('fs');\nconst promptsPath = require('path').join(require('path').join(require('os').homedir(), 'Downloads', 'tiktok-n8n-workflow-pack'), 'tiktok-workflow-prompts.json');\nconst prompts = JSON.parse(fs.readFileSync(promptsPath, 'utf8'));\nconst cfg = prompts.veo_repair || {};\nconst row = $input.first().json || {};\n\nfunction tpl(str, vars) {\n  let out = String(str || '');\n  for (const [k, v] of Object.entries(vars)) {\n    out = out.split('{{' + k + '}}').join(v == null ? '' : String(v));\n  }\n  return out;\n}\n\nconst history = Array.isArray(row.veo_failure_history) ? row.veo_failure_history : [];\nconst userText = tpl(cfg.user_template || '', {\n  project_id: row.project_id || '',\n  product_name: row.product_name || '',\n  shot_id: row.shot_id || '',\n  shot_order: row.shot_order || '',\n  stage: row.stage || '',\n  duration: row.duration || '',\n  video_prompt: row.video_prompt || row.veo_prompt_original || '',\n  failure_reason: row.veo_last_failure_reason || row.veo_failure_reason || '',\n  failure_history_json: JSON.stringify(history.slice(-6), null, 2),\n  continuity_requirements: row.continuity_requirements || '',\n});\n\nreturn [{\n  json: {\n    ...row,\n    request_body: {\n      system_instruction: { parts: [{ text: cfg.system_instruction || '' }] },\n      contents: [{ role: 'user', parts: [{ text: userText }] }],\n      generationConfig: cfg.generation_config || { responseMimeType: 'application/json' },\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4040,
+        -280
+      ],
+      "id": "veo-repair-request-v1",
+      "name": "Veo失败提示词请求体"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.GEMINI_TEXT_MODEL_URL || ('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=' + $env.GEMINI_API_KEY) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.request_body }}",
+        "options": {
+          "timeout": 900000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4300,
+        -280
+      ],
+      "id": "veo-repair-http-v1",
+      "name": "Veo失败提示词生成"
+    },
+    {
+      "parameters": {
+        "jsCode": "const base = $('Veo失败提示词请求体').first().json || {};\nconst rawText = $input.first().json?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';\nlet parsed = {};\ntry {\n  parsed = JSON.parse(rawText);\n} catch (error) {\n  throw new Error('Veo失败提示词解析失败：返回内容不是合法 JSON，详情：' + error.message);\n}\nconst nextPrompt = String(parsed.video_prompt || '').trim();\nif (!nextPrompt) {\n  throw new Error('Veo失败提示词解析失败：未返回 video_prompt');\n}\nreturn [{\n  json: {\n    ...base,\n    video_prompt: nextPrompt,\n    veo_prompt_regen_count: Number(base.veo_prompt_regen_count || 0) + 1,\n    veo_fail_streak: 0,\n    veo_recovery_action: 'retry_after_regen',\n    veo_prompt_adjustment_summary: parsed.adjustment_summary || '',\n    veo_prompt_risk_notes: parsed.risk_notes || '',\n    veo_last_failure_reason: '',\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4560,
+        -280
+      ],
+      "id": "veo-repair-parse-v1",
+      "name": "Veo失败提示词解析"
+    },
+    {
+      "parameters": {
+        "content": "## 续跑工作流 2：分镜审核 → 视频生成\n\n工作台分镜审核通过后，会调用这个 Webhook。\n\n这条线负责：逐镜生成视频、下载落盘、失败镜头重试、必要时重写提示词。",
+        "height": 190,
+        "width": 920,
+        "color": 4
+      },
+      "id": "阶段说明｜审核续跑入口",
+      "name": "阶段说明｜审核续跑入口",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -940,
+        -300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Stage 8 视频模型\n\n视频节点使用通用字段 video_provider / video_model。当前 provider 可以是 WaveSpeed Vidu；以后可替换为 Veo / Kling / Sora 等。",
+        "height": 180,
+        "width": 980,
+        "color": 5
+      },
+      "id": "阶段说明｜视频Provider",
+      "name": "阶段说明｜视频Provider",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        880,
+        -360
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## 失败恢复\n\n单镜头失败不会影响已完成视频。失败后优先重试；达到阈值后进入提示词修复链路。",
+        "height": 170,
+        "width": 900,
+        "color": 3
+      },
+      "id": "阶段说明｜失败恢复",
+      "name": "阶段说明｜失败恢复",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        3180,
+        -430
+      ]
+    }
+  ],
+  "connections": {
+    "review_submit_resume": {
+      "main": [
+        [
+          {
+            "node": "review_submit_normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "review_submit_normalize": {
+      "main": [
+        [
+          {
+            "node": "解析用户确认",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析用户确认": {
+      "main": [
+        [
+          {
+            "node": "审核进度初始化",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "分镜确认通过?": {
+      "main": [
+        [
+          {
+            "node": "恢复已确认分镜",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "准备重生成反馈",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "恢复已确认分镜": {
+      "main": [
+        [
+          {
+            "node": "Veo逐镜串行",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "准备重生成反馈": {
+      "main": [
+        []
+      ]
+    },
+    "Veo逐镜串行": {
+      "main": [
+        [
+          {
+            "node": "Veo结果汇总",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Veo进度_开始分镜",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo图片上传元数据": {
+      "main": [
+        [
+          {
+            "node": "Veo请求体组装",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo请求体组装": {
+      "main": [
+        [
+          {
+            "node": "逐镜视频_API_占位",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "逐镜视频_API_占位": {
+      "main": [
+        [
+          {
+            "node": "Veo提取任务ID",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo提取任务ID": {
+      "main": [
+        [
+          {
+            "node": "Veo进度_已提交任务",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo轮询等待": {
+      "main": [
+        [
+          {
+            "node": "Veo查询任务状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo查询任务状态": {
+      "main": [
+        [
+          {
+            "node": "Veo解析任务状态",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo解析任务状态": {
+      "main": [
+        [
+          {
+            "node": "Veo已完成?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo已完成?": {
+      "main": [
+        [
+          {
+            "node": "Veo下载视频",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Veo轮询等待",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo下载视频": {
+      "main": [
+        [
+          {
+            "node": "Veo进度_完成分镜",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "审核进度初始化": {
+      "main": [
+        [
+          {
+            "node": "分镜确认通过?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo进度_开始分镜": {
+      "main": [
+        [
+          {
+            "node": "Veo图片上传元数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo进度_已提交任务": {
+      "main": [
+        [
+          {
+            "node": "Veo轮询等待",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo进度_完成分镜": {
+      "main": [
+        [
+          {
+            "node": "Veo失败恢复策略",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo失败恢复策略": {
+      "main": [
+        [
+          {
+            "node": "Veo需要恢复?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo需要恢复?": {
+      "main": [
+        [
+          {
+            "node": "Veo重写提示词?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Veo逐镜串行",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo重写提示词?": {
+      "main": [
+        [
+          {
+            "node": "Veo失败提示词请求体",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Veo请求体组装",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo失败提示词请求体": {
+      "main": [
+        [
+          {
+            "node": "Veo失败提示词生成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo失败提示词生成": {
+      "main": [
+        [
+          {
+            "node": "Veo失败提示词解析",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Veo失败提示词解析": {
+      "main": [
+        [
+          {
+            "node": "Veo请求体组装",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "pinData": {},
+  "versionId": "0a8f7cce-f08a-4396-84b8-0d60eb4a774f",
+  "meta": {
+    "createdBy": "codex",
+    "purpose": "review-submit-veo-continuation"
+  },
+  "tags": []
+}

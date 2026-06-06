@@ -1,0 +1,13 @@
+{
+  "projectState": {
+    "project_id": "proj_fixture_001",
+    "stage": "creative_generating"
+  },
+  "projectFiles": {
+    "conceptContext": "concept_context_proj_fixture_001.json"
+  },
+  "options": {
+    "conceptContext": "concept_context_proj_fixture_001.json"
+  }
+}
+

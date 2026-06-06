@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AI Video — macOS app icon source (1024x1024).
+  Abstract, original artwork. No third-party logos or trademarks.
+  Elements: macOS squircle, layered video frames, central play/generate
+  triangle, AI spark accent. Pure vector — no embedded fonts or remote refs.
+-->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Premium AI-product background: deep indigo -> blue -> cyan -->
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b35d6"/>
+      <stop offset="0.5" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0ea5b7"/>
+    </linearGradient>
+    <!-- Soft top highlight for glass depth -->
+    <radialGradient id="glow" cx="0.3" cy="0.18" r="0.9">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.30"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Frame card gradients -->
+    <linearGradient id="cardBack" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.10"/>
+    </linearGradient>
+    <linearGradient id="cardFront" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.97"/>
+      <stop offset="1" stop-color="#eef4ff" stop-opacity="0.92"/>
+    </linearGradient>
+    <linearGradient id="playFill" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#0ea5b7"/>
+    </linearGradient>
+    <filter id="softShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#0b1437" flood-opacity="0.30"/>
+    </filter>
+  </defs>
+
+  <!-- macOS squircle plate -->
+  <g filter="url(#softShadow)">
+    <rect x="80" y="80" width="864" height="864" rx="208" ry="208" fill="url(#bg)"/>
+  </g>
+  <rect x="80" y="80" width="864" height="864" rx="208" ry="208" fill="url(#glow)"/>
+
+  <!-- Layered video frames suggesting generation / timeline depth -->
+  <g transform="rotate(-9 512 512)">
+    <rect x="300" y="332" width="424" height="300" rx="40" ry="40" fill="url(#cardBack)" transform="translate(-46 -30)"/>
+    <rect x="300" y="332" width="424" height="300" rx="40" ry="40" fill="url(#cardBack)" transform="translate(-22 -14)"/>
+    <rect x="300" y="332" width="424" height="300" rx="44" ry="44" fill="url(#cardFront)"/>
+  </g>
+
+  <!-- Central play / generate triangle -->
+  <g transform="rotate(-9 512 512)">
+    <path d="M 470 412 L 470 552 L 596 482 Z" fill="url(#playFill)" stroke="#1d4ed8" stroke-width="6" stroke-linejoin="round"/>
+  </g>
+
+  <!-- AI spark accents -->
+  <g fill="#ffffff">
+    <path d="M 742 300 C 742 348 760 366 808 366 C 760 366 742 384 742 432 C 742 384 724 366 676 366 C 724 366 742 348 742 300 Z" opacity="0.95"/>
+    <path d="M 318 678 C 318 706 329 717 357 717 C 329 717 318 728 318 756 C 318 728 307 717 279 717 C 307 717 318 706 318 678 Z" opacity="0.8"/>
+  </g>
+</svg>

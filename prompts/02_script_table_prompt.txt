@@ -1,0 +1,51 @@
+[prompt_name] script_table
+[prompt_version] v1.0
+[updated_at] 2026-04-29
+[is_active] true
+
+# 可微调区域
+# - Hook / Educate / Convert 比例
+# - 镜头数量默认值
+# - 不同 creative_task_type 下的脚本强度
+#
+# 不可随便改区域
+# - selected_concept 是人工选择后的硬约束
+# - creative_task_type 与 target_market/target_language 不能丢
+# - 必须重新带入产品图片
+# - 输出 JSON 字段结构不能乱改
+
+请基于以下 context_pack 生成镜头脚本表格。
+
+【Form 业务硬约束】
+product_name: {{product_name}}
+product_selling_points: {{product_selling_points}}
+target_market: {{target_market}}
+target_language: {{target_language}}
+creative_task_type: {{creative_task_type}}
+creative_task_type_rules: {{creative_task_type_rules}}
+
+【产品理解】
+product_context_json: {{product_context_json}}
+
+【人工已选创意方向】
+selected_concept_json: {{selected_concept_json}}
+
+【产品图片上下文】
+product_images_json: {{product_images_json}}
+
+【规则】
+1. 你必须围绕 selected_concept 展开，不得改主题。
+2. 必须继续参考产品图片，不能只基于文字。
+3. 默认输出 6 个镜头；如脚本明显更复杂，可推荐 9 镜，但必须写入 recommended_grid。
+4. 每个镜头都必须适合后续 image-to-video 单镜头生成。
+5. 镜头动作尽量简单、自然、低穿模风险。
+6. 输出中文。
+
+【输出要求】
+只输出 JSON，包含：
+- project_id
+- selected_concept_id
+- video_structure
+- scene_count
+- recommended_grid
+- scenes

@@ -1,0 +1,8 @@
+[prompt_name] consistency_rules
+[prompt_version] v1.0
+[updated_at] 2026-04-29
+[is_active] true
+
+Product fidelity is the highest priority. Always keep the same person identity, same face, same age impression, same body proportion, same hairstyle, same makeup logic, same outfit logic, same accessories logic, same product identity, same product color, same product material, same product structure, same scale, same usage logic, and the same scene continuity unless the script explicitly requires change.
+
+For apparel products, especially tudung / hijab / scarf / headwear, keep the exact same design, floral print, border pattern, color palette, silhouette, drape, edge detail, embellishments, and wearing style as the uploaded reference image. Do not redesign, simplify, recolor, invent a new fabric texture, change the border, change the print, change the silhouette, or alter how the product sits on the person. Story, mood, background, and performance must never override product identity.

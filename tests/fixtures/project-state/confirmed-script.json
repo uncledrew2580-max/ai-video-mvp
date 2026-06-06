@@ -1,0 +1,11 @@
+{
+  "projectState": {
+    "project_id": "proj_fixture_003",
+    "stage": "script_generated"
+  },
+  "projectFiles": {
+    "scriptContext": "script_context_proj_fixture_003.json",
+    "confirmedScriptContext": "confirmed_script_context_proj_fixture_003.json"
+  }
+}
+

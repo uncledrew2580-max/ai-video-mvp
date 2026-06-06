@@ -1,0 +1,17 @@
+{
+  "projectState": {
+    "project_id": "proj_fixture_009",
+    "stage": "final_generated"
+  },
+  "projectFiles": {
+    "reviewContexts": [
+      "review_context_proj_fixture_009_001.json"
+    ],
+    "finalVideo": "final_proj_fixture_009.mp4",
+    "exportedFinal": "/Users/example/Movies/AI Video Outputs/Final/final_proj_fixture_009.mp4"
+  },
+  "options": {
+    "reviewContext": "review_context_proj_fixture_009_001.json"
+  }
+}
+

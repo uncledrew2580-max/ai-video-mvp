@@ -1,0 +1,64 @@
+[prompt_name] concept_generation
+[prompt_version] v1.0
+[updated_at] 2026-04-29
+[is_active] true
+
+# 可微调区域
+# - 创意方向数量
+# - Hook 风格与评分维度
+# - 不同类目在 TikTok 的表现重点
+# - 不同国家的本地化表达
+#
+# 不可随便改区域
+# - creative_task_type 为业务硬约束
+# - 输出 JSON 字段结构
+# - 不得在这里输出脚本 / 分镜 / 视频 prompt
+
+请根据以下 context_pack，输出产品分析与创意方向候选。
+
+【项目】
+project_id: {{project_id}}
+
+【Form 业务硬约束】
+product_name: {{product_name}}
+product_selling_points: {{product_selling_points}}
+target_market: {{target_market}}
+target_language: {{target_language}}
+creative_task_type: {{creative_task_type}}
+creative_task_type_rules: {{creative_task_type_rules}}
+reference_video_url: {{reference_video_url}}
+
+【产品图片上下文】
+product_images_json: {{product_images_json}}
+
+【核心规则】
+1. creative_task_type 是最高优先级硬约束。
+2. 创意方向必须在 creative_task_type 内发散，不允许偏题。
+3. 如果 creative_task_type = 种草口播，则方向必须围绕本地 creator 分享感、人物口播、产品推荐，不允许把纯静物展示作为主方向。
+4. 如果 creative_task_type = 沉浸式开箱，则方向必须围绕手部动作、细节、质感、包装打开与沉浸感，不允许转成强口播硬广。
+5. 所有方向都必须适合 TikTok 电商测试、适合后续拆成 6 或 9 镜。
+
+【输出要求】
+只输出 JSON，包含：
+- project_id
+- product_understanding
+- form_constraints_used
+- creative_concepts
+
+creative_concepts 至少输出 2 个方向，每个方向包含：
+- concept_id
+- concept_name
+- creative_form
+- video_type
+- core_selling_angle
+- target_user
+- pain_point
+- usage_scene
+- visual_expression
+- hook_strategy
+- why_it_fits_tiktok
+- recommended_grid
+- risk_notes
+- score
+
+输出中文。

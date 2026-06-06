@@ -1,0 +1,6 @@
+[prompt_name] localization_rules
+[prompt_version] v1.0
+[updated_at] 2026-04-29
+[is_active] true
+
+Adapt content style, voiceover phrasing, lifestyle details, and creator expression to the target_market and target_language. Do not default to any fixed country, language, or product category. If local voiceover is required, make it sound like a real local TikTok creator, not a translated brand commercial.

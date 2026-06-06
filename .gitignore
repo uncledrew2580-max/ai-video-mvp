@@ -1,0 +1,71 @@
+# ── Secrets / keys / local config (NEVER commit) ─────────────────────────────
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.keystore
+license-authority/
+# Local runtime configs may hold API keys — keep only the *.example.json templates.
+config/local-config.json
+版本测试/config/local-config.json
+**/local-config.json
+!**/local-config.example.json
+
+# ── Dependencies / build outputs / release artifacts (large, regenerable) ────
+node_modules/
+**/node_modules/
+dist/
+dist-win/
+build/
+release-candidates/
+runtime/bin/
+generated-videos/
+
+# ── Historical / archived / work-order snapshots (large) ─────────────────────
+archive-disabled/
+archive-stable/
+agent-work-orders/
+不要导入-历史备份/
+
+# ── n8n local caches, workflow data, user data, logs, diagnostics ────────────
+.n8n-local-cache/
+.n8n-local-cache-backups/
+**/.n8n-local-cache/
+**/.n8n-local-cache-backups/
+workflow-data/
+n8n-user/
+logs/
+**/logs/
+diagnostics/
+**/diagnostics/
+版本测试/backups/
+
+# ── Media / archives / disk images (large generated output) ──────────────────
+*.dmg
+*.zip
+*.mp4
+*.mov
+*.m4a
+*.wav
+*.tar
+*.tar.gz
+*.tgz
+*.icns
+
+# ── P14-A1 drafts ignored until workflow is completed ────────────────────────
+# These reference helper scripts/tests not yet created; committing now would make
+# the first GitHub Actions run fail. Kept on disk, excluded from the P14-A0 commit.
+.github/workflows/windows-portable.yml
+scripts/win/
+
+# ── Local agent / editor state (machine-specific, not project source) ────────
+.claude/
+
+# ── Scratch / temp / editor / OS ─────────────────────────────────────────────
+.tmp-*
+*.patch
+.codex-session
+.DS_Store
+**/.DS_Store
+*.log

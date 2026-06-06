@@ -1,0 +1,18 @@
+{
+  "projectState": {
+    "project_id": "proj_fixture_011",
+    "stage": "failed",
+    "status": "failed",
+    "user_message": "Historical failure"
+  },
+  "projectFiles": {
+    "reviewContexts": [
+      "review_context_proj_fixture_011_001.json"
+    ],
+    "finalVideo": "final_proj_fixture_011.mp4"
+  },
+  "options": {
+    "reviewContext": "review_context_proj_fixture_011_001.json"
+  }
+}
+
