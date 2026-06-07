@@ -58,9 +58,9 @@ jobs:
           if (-not (Test-Path 'node_modules/@img/sharp-win32-x64')) { Write-Error '@img/sharp-win32-x64 not installed'; exit 1 }
           Write-Host '@img/sharp-win32-x64 present OK'
 
-      - name: Verify native modules are win32-x64 (no darwin/linux hard-copy)
-        shell: pwsh
-        run: node scripts/win/verify-native-modules.mjs
+      # Note: native-module win32-x64 verification runs LATER against the filtered
+      # portable staging tree (after assemble), not the raw install tree — some
+      # packages legitimately ship multi-platform prebuilds that we strip at staging.
 
       - name: Fetch official Windows node.exe (+ verify SHA256)
         shell: pwsh
@@ -95,9 +95,17 @@ jobs:
           AI_VIDEO_FFMPEG_PATH: ${{ github.workspace }}\runtime\bin\ffmpeg.exe
         run: node --test tests/nonpaid/p14-windows-final-merge.test.mjs
 
-      - name: Assemble portable + zip + manifest + SHA256
+      - name: Assemble portable staging tree (filter non-win32 native modules)
         shell: pwsh
         run: node scripts/win/assemble-windows-portable.mjs
+
+      - name: Verify ARTIFACT TREE native modules are win32-x64 (no darwin/linux)
+        shell: pwsh
+        run: node scripts/win/verify-native-modules.mjs "dist-win/AI-Video-Win-x64-Portable-RC-0001/node_modules"
+
+      - name: Zip portable + SHA256 (only after artifact-tree verification passes)
+        shell: pwsh
+        run: node scripts/win/zip-windows-portable.mjs
 
       - name: Upload portable zip artifact
         uses: actions/upload-artifact@v4

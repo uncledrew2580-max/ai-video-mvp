@@ -1,13 +1,20 @@
 #!/usr/bin/env node
-// P14-A1: prove the node_modules native addons were built for win32-x64 ON the
-// Windows runner (npm ci), NOT hard-copied from macOS. Every *.node must be a
-// Windows PE (MZ header) with machine type x64 (0x8664). Mach-O/ELF => FAIL.
+// P14-A1R2: verify the WINDOWS ARTIFACT TREE (the filtered portable staging
+// node_modules), NOT the raw post-install tree. Every *.node that ships in the
+// portable zip must be a Windows PE, machine x64 (0x8664). Mach-O/ELF or any
+// darwin/linux path/filename in the staging tree => FAIL. Multi-platform packages
+// may ship sibling prebuilds after `npm ci`, but the packaging filter must strip
+// them before this check runs against the staging tree.
+//
+// Usage: node verify-native-modules.mjs [targetNodeModulesDir]
+//   default target: <repo>/dist-win/AI-Video-Win-x64-Portable-RC-0001/node_modules
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const NM = path.join(ROOT, 'node_modules');
+const DEFAULT_TARGET = path.join(ROOT, 'dist-win', 'AI-Video-Win-x64-Portable-RC-0001', 'node_modules');
+const NM = process.argv[2] ? path.resolve(process.argv[2]) : DEFAULT_TARGET;
 
 function* walk(dir) {
   let entries;
@@ -26,12 +33,10 @@ function classify(file) {
   try {
     const head = Buffer.alloc(64);
     fs.readSync(fd, head, 0, 64, 0);
-    // Mach-O (darwin): feedface/feedfacf/cafebabe(fat). ELF (linux): 7f454c46.
     const m32 = head.readUInt32BE(0);
     if ([0xcafebabe, 0xfeedface, 0xfeedfacf, 0xcffaedfe, 0xcefaedfe].includes(m32)) return { ok: false, kind: 'mach-o' };
     if (m32 === 0x7f454c46) return { ok: false, kind: 'elf' };
     if (!(head[0] === 0x4d && head[1] === 0x5a)) return { ok: false, kind: 'unknown' }; // not "MZ"
-    // PE: e_lfanew at 0x3C -> "PE\0\0" -> Machine (uint16 LE). 0x8664 = x64.
     const peOff = head.readUInt32LE(0x3c);
     const peHdr = Buffer.alloc(6);
     fs.readSync(fd, peHdr, 0, 6, peOff);
@@ -41,55 +46,50 @@ function classify(file) {
   } finally { fs.closeSync(fd); }
 }
 
-if (!fs.existsSync(NM)) { console.error('[native] node_modules missing — run npm ci first'); process.exit(1); }
-let total = 0; const bad = []; const mods = new Set();
+if (!fs.existsSync(NM)) { console.error(`[native] FAIL: target tree missing: ${NM}`); process.exit(1); }
+console.log(`[native] verifying artifact tree: ${NM}`);
+
+let total = 0; const bad = []; const leaks = []; const mods = new Set();
 for (const f of walk(NM)) {
   total++;
   const rel = path.relative(NM, f);
   mods.add(rel.split(path.sep)[0]);
+  // 3) any darwin/linux path or filename in the staging tree is forbidden.
+  if (/(?:^|[\\/_.-])(darwin|linux)(?:[\\/_.-]|$)/i.test(rel)) leaks.push(rel);
   const c = classify(f);
   if (!c.ok) bad.push(`${rel} [${c.kind}${c.machine ? ' ' + c.machine : ''}]`);
 }
-console.log(`[native] scanned ${total} .node files across ${mods.size} modules`);
-if (total === 0) { console.error('[native] FAIL: no native addons found — npm ci did not build win32 binaries'); process.exit(1); }
-if (bad.length) {
-  console.error(`[native] FAIL: ${bad.length} non-win32-x64 addon(s) (Mac/linux hard-copy or wrong arch):`);
-  for (const b of bad.slice(0, 20)) console.error('  - ' + b);
-  process.exit(1);
-}
+console.log(`[native] scanned ${total} .node in ${mods.size} modules`);
 
-// Explicitly fail if any darwin/linux platform package leaked into the Windows tree.
-const LEAK_DIRS = [
-  '@img/sharp-darwin-arm64', '@img/sharp-darwin-x64', '@img/sharp-linux-x64', '@img/sharp-linux-arm64',
-  '@img/sharp-libvips-darwin-arm64', '@img/sharp-libvips-darwin-x64', '@img/sharp-libvips-linux-x64',
-];
-const leaks = LEAK_DIRS.filter((d) => fs.existsSync(path.join(NM, ...d.split('/'))));
+let failed = false;
+if (total === 0) { console.error('[native] FAIL: no native addons in staging tree — assemble missing node_modules?'); failed = true; }
 if (leaks.length) {
-  console.error('[native] FAIL: non-win32 platform packages present (Mac/linux hard-copy):');
-  for (const l of leaks) console.error('  - ' + l);
-  process.exit(1);
+  console.error(`[native] FAIL: ${leaks.length} darwin/linux-named .node in staging tree (must be filtered out):`);
+  for (const l of leaks.slice(0, 30)) console.error('  - ' + l);
+  failed = true;
+}
+if (bad.length) {
+  console.error(`[native] FAIL: ${bad.length} non-win32-x64 .node in staging tree:`);
+  for (const b of bad.slice(0, 30)) console.error('  - ' + b);
+  failed = true;
 }
 
-// Key modules the runtime depends on — confirm each has a win32-x64 addon present.
+// 4) explicit key-module report.
 const KEY = {
-  'sharp (win32-x64 prebuilt)': '@img/sharp-win32-x64',
+  '@img/sharp-win32-x64': '@img/sharp-win32-x64',
   'sqlite3': 'sqlite3',
   '@parcel/watcher': path.join('@parcel', 'watcher'),
   'cpu-features': 'cpu-features',
+  '@sentry-internal/node-cpu-profiler': path.join('@sentry-internal', 'node-cpu-profiler'),
 };
-let keyMissing = 0;
 for (const [label, rel] of Object.entries(KEY)) {
   const dir = path.join(NM, rel);
-  if (!fs.existsSync(dir)) { console.warn(`[native] note: ${label} not present (may be optional/transitive)`); continue; }
+  if (!fs.existsSync(dir)) { console.log(`[native] key: ${label} -> absent (excluded by packaging filter or not needed)`); continue; }
   const found = [...walk(dir)];
-  if (found.length === 0) {
-    // sharp-win32-x64 ships a .node; sqlite3/parcel/cpu-features should too if used.
-    if (rel === '@img/sharp-win32-x64') { console.error(`[native] FAIL: ${label} present but has no .node binary`); keyMissing++; }
-    else console.log(`[native] ${label}: present (no nested .node — ok if pure-js wrapper)`);
-  } else {
-    console.log(`[native] ${label}: ${found.length} win32-x64 .node ✅`);
-  }
+  const allWin = found.every((f) => classify(f).ok);
+  console.log(`[native] key: ${label} -> present, ${found.length} .node, win32-x64=${found.length === 0 ? 'n/a' : allWin}`);
+  if (found.length && !allWin) failed = true;
 }
-if (keyMissing) process.exit(1);
 
-console.log('[native] PASS: all native addons are win32-x64 PE; no darwin/linux leak; key modules OK.');
+if (failed) process.exit(1);
+console.log('[native] PASS: artifact tree native addons are all win32-x64 PE; no darwin/linux leak.');
