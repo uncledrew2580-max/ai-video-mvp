@@ -57,6 +57,20 @@ need('@n8n/backend-common', { dir: true });
 need('n8n-core', { dir: true });
 need('n8n-workflow', { dir: true });
 
+// 4) zod de-duplication. n8n's module loader requires breaking-changes.module, which
+// (via @n8n/api-types) builds a zod discriminatedUnion. A DIFFERENT nested zod under
+// @n8n/api-types or n8n-workflow yields two zod instances -> load fails with
+// "discriminator value for key __type ... could not be extracted", reported as a
+// misleading missing breaking-changes.ee module. The single top-level zod must win.
+const TOPLEVEL_ZOD = path.join(NM, 'zod');
+if (!fs.existsSync(TOPLEVEL_ZOD)) fail.push('zod (top-level)');
+else ok.push('zod (top-level)');
+for (const dupRel of ['@n8n/api-types/node_modules/zod', 'n8n-workflow/node_modules/zod']) {
+  const dup = path.join(NM, ...dupRel.split('/'));
+  if (fs.existsSync(dup)) fail.push(`duplicate nested zod present: ${dupRel} (must be de-duplicated)`);
+  else ok.push(`no nested zod: ${dupRel}`);
+}
+
 console.log(`[n8n-complete] present: ${ok.length}`);
 for (const o of ok) console.log('  ✅ ' + o);
 if (fail.length) {

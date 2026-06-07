@@ -43,11 +43,21 @@ function copyFiltered(src, dest) {
     filter: (s) => {
       const rel = path.relative(ROOT, s);
       const parts = rel.split(path.sep);
+      const relU = parts.join('/');
       if (parts.at(-1) === '.DS_Store') return false;
       if (parts[0] === 'node_modules') {
         if (parts[1] && NM_SKIP_TOP.has(parts[1])) return false;
         if (parts[1] && parts[2] && NM_SKIP_SCOPED.has(path.join(parts[1], parts[2]))) return false;
       }
+      // n8n 2.x requires @n8n/api-types and n8n-workflow to share ONE zod instance.
+      // These ship a DIFFERENT nested zod (e.g. 3.25.67 vs top-level 3.25.76); keeping
+      // them yields two zod copies and breaks module load with a discriminatedUnion
+      // error ("discriminator value for key __type ... could not be extracted"), which
+      // surfaces as a misleading "Cannot find module breaking-changes.ee/...". Drop the
+      // nested copies so resolution falls back to the single top-level zod (mirrors the
+      // Mac packager).
+      if (/(^|\/)node_modules\/@n8n\/api-types\/node_modules\/zod(\/|$)/.test(relU)) return false;
+      if (/(^|\/)node_modules\/n8n-workflow\/node_modules\/zod(\/|$)/.test(relU)) return false;
       if (rel === path.join('runtime', 'bin', 'ffmpeg')) return false; // never ship the mac/linux ffmpeg
       if (parts.includes('.n8n-local-cache') || parts.includes('.n8n-local-cache-backups')) return false;
       if (parts[0] === '版本测试' && ['logs', 'backups', '正式导入文件'].includes(parts[1])) return false;
