@@ -95,6 +95,77 @@ function stripNonWin32Addons(nmDir) {
   log(`stripped ${removed} non-win32 .node (kept ${kept} win32-x64) from staging node_modules`);
 }
 
+// Prune dev-only weight from node_modules that is never needed at runtime, so the
+// portable zip stays small/fast. Conservative: keeps LICENSE, package.json, all
+// code (.js/.cjs/.mjs/.json) and win32 .node; only drops dev dirs + source maps + docs.
+const PRUNE_DIRS = new Set(['test', 'tests', '__tests__', 'example', 'examples', 'docs', '.github', '.vscode', '.idea', 'coverage', '.nyc_output', '.cache']);
+// License/compliance docs that MUST be kept even when they use a .md extension.
+const COMPLIANCE_DOC = /(license|licence|notice|copying|copyright|patent|third[-_]?party|legal)/i;
+// Recursively check whether a directory holds any license/compliance document.
+function containsComplianceDoc(dir) {
+  let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return false; }
+  for (const e of entries) {
+    if (e.isSymbolicLink()) continue;
+    if (e.isDirectory()) { if (containsComplianceDoc(path.join(dir, e.name))) return true; }
+    else if (COMPLIANCE_DOC.test(e.name)) return true;
+  }
+  return false;
+}
+function pruneStagingTree(stageDir) {
+  const nm = path.join(stageDir, 'node_modules');
+  if (!fs.existsSync(nm)) return;
+  let dirsRm = 0, filesRm = 0;
+  const stack = [nm];
+  while (stack.length) {
+    const d = stack.pop();
+    let entries; try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) {
+        // dev dirs are removed unless they contain license/compliance docs; in that
+        // case we traverse them so file-level prune keeps the compliance files.
+        if (PRUNE_DIRS.has(e.name)) {
+          if (containsComplianceDoc(full)) { stack.push(full); }
+          else { fs.rmSync(full, { recursive: true, force: true }); dirsRm++; }
+          continue;
+        }
+        stack.push(full);
+      } else if (/\.(map|md|markdown)$/i.test(e.name) && !COMPLIANCE_DOC.test(e.name)) {
+        // Drop ordinary README/docs and source maps, but never license/compliance
+        // files (LICENSE.md, NOTICE.md, COPYING.md, COPYRIGHT.md, PATENTS.md, ...).
+        fs.rmSync(full, { force: true }); filesRm++;
+      }
+    }
+  }
+  log(`pruned node_modules: ${dirsRm} dev dirs, ${filesRm} readme/doc/map files (license/notice/copying kept)`);
+}
+
+// Print staging-tree stats (file/dir count, total size, top 30 dirs) before zipping.
+function printStagingStats(stageDir) {
+  let files = 0, dirs = 0, bytes = 0;
+  const buckets = new Map(); // first 2 path segments -> bytes
+  const stack = [stageDir];
+  while (stack.length) {
+    const d = stack.pop();
+    let entries; try { entries = fs.readdirSync(d, { withFileTypes: true }); } catch { continue; }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) { dirs++; stack.push(full); continue; }
+      files++;
+      let sz = 0; try { sz = fs.statSync(full).size; } catch {}
+      bytes += sz;
+      const rel = path.relative(stageDir, full).split(path.sep).slice(0, 2).join('/');
+      buckets.set(rel, (buckets.get(rel) || 0) + sz);
+    }
+  }
+  const mb = (n) => (n / 1048576).toFixed(1) + ' MB';
+  log(`staging stats: ${files} files, ${dirs} dirs, total ${mb(bytes)}`);
+  const top = [...buckets.entries()].sort((a, b) => b[1] - a[1]).slice(0, 30);
+  for (const [k, v] of top) log(`  ${mb(v).padStart(10)}  ${k}`);
+}
+
 function scrubApiKeys(v) {
   if (Array.isArray(v)) return v.map(scrubApiKeys);
   if (!v || typeof v !== 'object') return v;
@@ -148,6 +219,7 @@ function main() {
   }
 
   stripNonWin32Addons(path.join(STAGE, 'node_modules'));
+  pruneStagingTree(STAGE);
 
   sanitizeConfig(path.join('config', 'local-config.json'));
   sanitizeConfig(path.join('版本测试', 'config', 'local-config.json'));
@@ -174,5 +246,6 @@ function main() {
   fs.writeFileSync(path.join(STAGE, 'runtime-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
   log(`staged. node ${nodeVer} | ${manifest.ffmpeg_version}`);
   log(`staging tree: ${STAGE}`);
+  printStagingStats(STAGE);
 }
 main();
