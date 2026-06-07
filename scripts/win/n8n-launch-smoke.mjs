@@ -50,11 +50,13 @@ async function main() {
   const logPath = path.join(userFolder, 'n8n.log');
   const logFd = fs.openSync(logPath, 'a');
   const port = await freePort();
+  const brokerPort = await freePort(); // task-runner broker — pick a free one to avoid collisions
   const env = {
     ...process.env,
     N8N_USER_FOLDER: userFolder,
     N8N_ENCRYPTION_KEY: 'p14b1smoke0000000000000000000000',
     N8N_PORT: String(port),
+    N8N_RUNNERS_BROKER_PORT: String(brokerPort),
     N8N_HOST: '127.0.0.1',
     N8N_LISTEN_ADDRESS: '127.0.0.1',
     N8N_PROTOCOL: 'http',

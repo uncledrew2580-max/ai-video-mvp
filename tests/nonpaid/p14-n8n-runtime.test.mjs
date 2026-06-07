@@ -21,9 +21,9 @@ const CHECK = path.join(ROOT, 'scripts', 'win', 'check-n8n-runtime-completeness.
 
 const PROTECT_N8N = /(^|\/node_modules\/)(@n8n\/|n8n\/|n8n-core\/|n8n-workflow\/|n8n-[^/]+\/)/;
 const isN8n = (rel) => PROTECT_N8N.test(rel.split(path.sep).join('/') + '/');
-const ZOD_DUP_1 = /(^|\/)node_modules\/@n8n\/api-types\/node_modules\/zod(\/|$)/;
-const ZOD_DUP_2 = /(^|\/)node_modules\/n8n-workflow\/node_modules\/zod(\/|$)/;
-const dropsZodDup = (p) => ZOD_DUP_1.test(p) || ZOD_DUP_2.test(p);
+// Mirror of the assemble rule: drop EVERY nested */node_modules/zod, keep top-level.
+const NESTED_ZOD = /(^|\/)node_modules\/.+\/node_modules\/zod(\/|$)/;
+const dropsZodDup = (p) => NESTED_ZOD.test(p);
 
 test('prune protection covers the n8n runtime family (top-level + nested)', () => {
   for (const p of [
@@ -36,11 +36,18 @@ test('prune protection covers the n8n runtime family (top-level + nested)', () =
   }
 });
 
-test('assemble drops the duplicate nested zod but keeps top-level + others', () => {
-  for (const p of ['node_modules/@n8n/api-types/node_modules/zod/index.js', 'node_modules/n8n-workflow/node_modules/zod/lib/x.js']) {
+test('assemble drops ALL nested zod, keeps only the top-level one', () => {
+  for (const p of [
+    'node_modules/@n8n/api-types/node_modules/zod/index.js',
+    'node_modules/n8n-workflow/node_modules/zod/lib/x.js',
+    'node_modules/n8n/node_modules/zod/x.js',
+    'node_modules/@n8n/config/node_modules/zod',
+    'node_modules/n8n-core/node_modules/zod/x.js',
+    'node_modules/@n8n/ai-utilities/node_modules/@langchain/core/node_modules/zod',
+  ]) {
     assert.ok(dropsZodDup(p), `should drop nested zod: ${p}`);
   }
-  for (const p of ['node_modules/zod/index.js', 'node_modules/@n8n/api-types/dist/index.js', 'node_modules/n8n-core/node_modules/zod/x.js']) {
+  for (const p of ['node_modules/zod/index.js', 'node_modules/zod/lib/x.js', 'node_modules/@n8n/api-types/dist/index.js']) {
     assert.ok(!dropsZodDup(p), `should keep: ${p}`);
   }
 });
@@ -51,13 +58,13 @@ test('win scripts are syntactically valid', () => {
   }
 });
 
-test('completeness check FAILS when a duplicate nested zod is present', () => {
-  // The raw local install has @n8n/api-types/node_modules/zod — the guard must flag it.
+test('completeness check FAILS when any nested zod is present', () => {
+  // The raw local install ships many nested zod copies — the guard must flag them.
   const nm = path.join(ROOT, 'node_modules');
   if (!fs.existsSync(path.join(nm, '@n8n', 'api-types', 'node_modules', 'zod'))) { console.log('  (no nested zod locally — skip)'); return; }
   const r = spawnSync(process.execPath, [CHECK, nm], { encoding: 'utf8' });
-  assert.notEqual(r.status, 0, 'should fail on duplicate nested zod');
-  assert.match(r.stdout + r.stderr, /duplicate nested zod present/);
+  assert.notEqual(r.status, 0, 'should fail on nested zod');
+  assert.match(r.stdout + r.stderr, /nested zod present/);
 });
 
 test('completeness check PASSES on a clean de-duplicated synthetic tree', () => {
@@ -65,6 +72,7 @@ test('completeness check PASSES on a clean de-duplicated synthetic tree', () => 
   const nm = path.join(root, 'node_modules');
   const mk = (rel) => { fs.mkdirSync(path.dirname(path.join(nm, rel)), { recursive: true }); fs.writeFileSync(path.join(nm, rel), 'x'); };
   mk('n8n/bin/n8n');
+  mk('n8n/dist/commands/start.js');
   mk('n8n/dist/modules/breaking-changes/breaking-changes.module.js');
   mk('@n8n/backend-common/index.js');
   mk('n8n-core/index.js');

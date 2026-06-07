@@ -57,18 +57,37 @@ need('@n8n/backend-common', { dir: true });
 need('n8n-core', { dir: true });
 need('n8n-workflow', { dir: true });
 
-// 4) zod de-duplication. n8n's module loader requires breaking-changes.module, which
-// (via @n8n/api-types) builds a zod discriminatedUnion. A DIFFERENT nested zod under
-// @n8n/api-types or n8n-workflow yields two zod instances -> load fails with
-// "discriminator value for key __type ... could not be extracted", reported as a
-// misleading missing breaking-changes.ee module. The single top-level zod must win.
+// 4) start command (n8n CLI loads dist/commands/start.js for `n8n start`).
+need('n8n/dist/commands/start.js');
+
+// 5) zod single-instance. n8n 2.x needs ONE shared zod across its tree. Any nested
+// */node_modules/zod yields multiple instances and breaks startup (discriminatedUnion
+// in @n8n/api-types -> masked missing breaking-changes.ee; @n8n/config .alias() patch on
+// a different copy -> "z.boolean(...).alias is not a function" masked as Command "start"
+// not found). The single top-level zod must be the only one.
 const TOPLEVEL_ZOD = path.join(NM, 'zod');
 if (!fs.existsSync(TOPLEVEL_ZOD)) fail.push('zod (top-level)');
 else ok.push('zod (top-level)');
-for (const dupRel of ['@n8n/api-types/node_modules/zod', 'n8n-workflow/node_modules/zod']) {
-  const dup = path.join(NM, ...dupRel.split('/'));
-  if (fs.existsSync(dup)) fail.push(`duplicate nested zod present: ${dupRel} (must be de-duplicated)`);
-  else ok.push(`no nested zod: ${dupRel}`);
+function findNestedZod(dir, depthFromNm = 0, acc = []) {
+  let entries; try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return acc; }
+  for (const e of entries) {
+    if (!e.isDirectory() || e.isSymbolicLink()) continue;
+    const full = path.join(dir, e.name);
+    // a "node_modules/zod" that is NOT the top-level one
+    if (e.name === 'zod' && path.basename(path.dirname(full)) === 'node_modules' && path.dirname(full) !== NM) {
+      acc.push(path.relative(NM, full));
+      continue;
+    }
+    findNestedZod(full, depthFromNm + 1, acc);
+  }
+  return acc;
+}
+const nested = findNestedZod(NM);
+if (nested.length) {
+  for (const n of nested.slice(0, 20)) fail.push(`nested zod present (must be de-duplicated to top-level): ${n}`);
+  if (nested.length > 20) fail.push(`...and ${nested.length - 20} more nested zod`);
+} else {
+  ok.push('no nested zod (single top-level instance)');
 }
 
 console.log(`[n8n-complete] present: ${ok.length}`);
