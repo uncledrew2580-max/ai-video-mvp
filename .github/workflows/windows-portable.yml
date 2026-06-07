@@ -103,6 +103,14 @@ jobs:
         shell: pwsh
         run: node scripts/win/verify-native-modules.mjs "dist-win/AI-Video-Win-x64-Portable-RC-0001/node_modules"
 
+      - name: Verify n8n runtime completeness (artifact tree)
+        shell: pwsh
+        run: node scripts/win/check-n8n-runtime-completeness.mjs "dist-win/AI-Video-Win-x64-Portable-RC-0001/node_modules"
+
+      - name: n8n launch smoke (start from portable tree, no real workflow)
+        shell: pwsh
+        run: node scripts/win/n8n-launch-smoke.mjs "dist-win/AI-Video-Win-x64-Portable-RC-0001"
+
       - name: Zip portable + SHA256 (only after artifact-tree verification passes)
         shell: pwsh
         run: node scripts/win/zip-windows-portable.mjs

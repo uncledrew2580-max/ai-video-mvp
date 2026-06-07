@@ -99,6 +99,13 @@ function stripNonWin32Addons(nmDir) {
 // portable zip stays small/fast. Conservative: keeps LICENSE, package.json, all
 // code (.js/.cjs/.mjs/.json) and win32 .node; only drops dev dirs + source maps + docs.
 const PRUNE_DIRS = new Set(['test', 'tests', '__tests__', 'example', 'examples', 'docs', '.github', '.vscode', '.idea', 'coverage', '.nyc_output', '.cache']);
+// n8n runtime trees are NEVER pruned (a missing dist module breaks startup, e.g.
+// dist/modules/breaking-changes.ee/breaking-changes.module). Matches n8n, the whole
+// @n8n scope, and any n8n-* package, at the top level or nested node_modules.
+const PROTECT_N8N = /(^|\/node_modules\/)(@n8n\/|n8n\/|n8n-core\/|n8n-workflow\/|n8n-[^/]+\/)/;
+function isN8nRuntimePath(relFromNm) {
+  return PROTECT_N8N.test(relFromNm.split(path.sep).join('/') + '/');
+}
 // License/compliance docs that MUST be kept even when they use a .md extension.
 const COMPLIANCE_DOC = /(license|licence|notice|copying|copyright|patent|third[-_]?party|legal)/i;
 // Recursively check whether a directory holds any license/compliance document.
@@ -122,6 +129,9 @@ function pruneStagingTree(stageDir) {
     for (const e of entries) {
       const full = path.join(d, e.name);
       if (e.isSymbolicLink()) continue;
+      const rel = path.relative(nm, full);
+      // n8n runtime is fully protected — never prune anything inside it.
+      if (isN8nRuntimePath(rel)) continue;
       if (e.isDirectory()) {
         // dev dirs are removed unless they contain license/compliance docs; in that
         // case we traverse them so file-level prune keeps the compliance files.
