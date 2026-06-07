@@ -53,9 +53,27 @@ test('assemble drops ALL nested zod, keeps only the top-level one', () => {
 });
 
 test('win scripts are syntactically valid', () => {
-  for (const s of ['check-n8n-runtime-completeness.mjs', 'n8n-launch-smoke.mjs', 'assemble-windows-portable.mjs', 'zip-windows-portable.mjs', 'verify-native-modules.mjs']) {
+  for (const s of ['check-n8n-runtime-completeness.mjs', 'n8n-launch-smoke.mjs', 'assemble-windows-portable.mjs', 'zip-windows-portable.mjs', 'verify-native-modules.mjs', 'diagnose-start-command.mjs']) {
     execFileSync(process.execPath, ['--check', path.join(ROOT, 'scripts', 'win', s)], { stdio: 'ignore' });
   }
+});
+
+test('start-command diagnostic surfaces the real first error (not the masked one)', () => {
+  // Against the raw install (which reproduces the start.js failure) the diagnostic
+  // must print the real error + resolution/zod audit, and exit 0 itself.
+  const nm = path.join(ROOT, 'node_modules');
+  if (!fs.existsSync(path.join(nm, 'n8n', 'dist', 'commands', 'start.js'))) { console.log('  (n8n not installed — skip)'); return; }
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'win', 'diagnose-start-command.mjs'), ROOT], {
+    encoding: 'utf8',
+    env: { ...process.env, N8N_USER_FOLDER: fs.mkdtempSync(path.join(os.tmpdir(), 'diagtest-')) },
+    timeout: 120000,
+  });
+  assert.equal(r.status, 0, `diagnostic itself should exit 0:\n${r.stderr}`);
+  assert.match(r.stdout, /require\.resolve/);
+  assert.match(r.stdout, /all zod package dirs/);
+  // start.js either loads OK (deduped) or prints a REAL ERROR (raw tree) — never only the masked text.
+  assert.ok(/REAL ERROR stack:/.test(r.stdout) || /start\.js loaded OK/.test(r.stdout), 'diagnostic must show real error or OK');
+  assert.ok(!/^Command "start" not found$/m.test(r.stdout), 'diagnostic must not stop at the masked message');
 });
 
 test('completeness check FAILS when any nested zod is present', () => {

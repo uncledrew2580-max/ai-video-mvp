@@ -6,7 +6,7 @@
 // No real workflows imported, no model calls, no paid APIs. Uses a throwaway
 // N8N_USER_FOLDER + encryption key + a free port. Cross-platform (resolves
 // node.exe on Windows, node on dev). Prints n8n.log tail on failure.
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -98,6 +98,21 @@ async function main() {
       const tail = fs.readFileSync(logPath, 'utf8').split('\n').slice(-60).join('\n');
       console.error('---- n8n.log (tail) ----\n' + tail);
     } catch {}
+    // n8n masks the start.js load error as "Command start not found". Run the
+    // first-error diagnostic with the bundled node.exe from the staging tree to
+    // surface the REAL stack (zod/config/module resolution, requireStack, etc.).
+    try {
+      const diagScript = path.join(STAGE, 'scripts', 'win', 'diagnose-start-command.mjs');
+      const diagToRun = fs.existsSync(diagScript) ? diagScript : fileURLToPath(import.meta.url).replace('n8n-launch-smoke.mjs', 'diagnose-start-command.mjs');
+      console.error('---- start-command first-error diagnostic ----');
+      const r = spawnSync(nodeBin, [diagToRun, STAGE], {
+        encoding: 'utf8',
+        timeout: 120000,
+        env: { ...process.env, N8N_USER_FOLDER: fs.mkdtempSync(path.join(os.tmpdir(), 'n8n-diag-')), N8N_ENCRYPTION_KEY: 'p14diag00000000000000000000000000' },
+      });
+      if (r.stdout) console.error(r.stdout);
+      if (r.stderr) console.error(r.stderr);
+    } catch (e) { console.error('[n8n-smoke] diagnostic failed to run:', e.message); }
     process.exit(1);
   }
   console.log('[n8n-smoke] PASS: n8n started and served /healthz from the portable tree.');
