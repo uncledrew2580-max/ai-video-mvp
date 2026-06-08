@@ -96,11 +96,72 @@ test('completeness check PASSES on a clean de-duplicated synthetic tree', () => 
   mk('n8n-core/index.js');
   mk('n8n-workflow/index.js');
   mk('zod/index.js');
+  // langchain runtime files — tests dir inside dist/ is runtime, not dev
+  mk('langchain/dist/index.cjs');
+  mk('langchain/dist/agents/tests/utils.cjs');
+  // @n8n/ai-workflow-builder — loaded via ai-workflow-builder.service.js
+  mk('@n8n/ai-workflow-builder/dist/workflow-builder-agent.js');
+  mk('@n8n/ai-workflow-builder/dist/agents/planner.agent.js');
   // deliberately NO @n8n/api-types/node_modules/zod and NO n8n-workflow/node_modules/zod
   try {
     const r = spawnSync(process.execPath, [CHECK, nm], { encoding: 'utf8' });
     assert.equal(r.status, 0, `expected PASS, got:\n${r.stdout}\n${r.stderr}`);
     assert.match(r.stdout, /PASS: n8n runtime is complete/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('prune: dist/ subdirs named test/tests/__tests__ are NOT deleted (runtime compiled output)', () => {
+  // Mirror the assemble prune guard: a directory inside a dist/ tree must be kept
+  // even if its name matches PRUNE_DIRS (test/tests/__tests__/examples/docs/etc.).
+  const PRUNE_DIRS = new Set(['test', 'tests', '__tests__', 'example', 'examples', 'docs', '.github', '.vscode', '.idea', 'coverage', '.nyc_output', '.cache']);
+  const isDistProtected = (relFromNm, dirName) => {
+    if (!PRUNE_DIRS.has(dirName)) return false; // not a prune candidate
+    const relU = relFromNm.split(path.sep).join('/');
+    return /(?:^|\/)dist\//.test(relU); // inside dist/ → keep
+  };
+  // These should be PROTECTED (inside dist/)
+  for (const [rel, name] of [
+    ['langchain/dist/agents/tests', 'tests'],
+    ['some-pkg/dist/tests', 'tests'],
+    ['some-pkg/dist/lib/tests', 'tests'],
+    ['some-pkg/dist/__tests__', '__tests__'],
+    ['some-pkg/dist/docs', 'docs'],
+    ['some-pkg/dist/examples', 'examples'],
+  ]) {
+    assert.ok(isDistProtected(rel, name), `should protect (inside dist/): ${rel}`);
+  }
+  // These should NOT be protected (not inside dist/)
+  for (const [rel, name] of [
+    ['some-pkg/tests', 'tests'],
+    ['some-pkg/src/tests', 'tests'],
+    ['some-pkg/lib/tests', 'tests'],
+    ['some-pkg/__tests__', '__tests__'],
+    ['some-pkg/docs', 'docs'],
+  ]) {
+    assert.ok(!isDistProtected(rel, name), `should NOT protect (not in dist/): ${rel}`);
+  }
+});
+
+test('completeness check FAILS when langchain runtime files are missing', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'n8nfail-lc-'));
+  const nm = path.join(root, 'node_modules');
+  const mk = (rel) => { fs.mkdirSync(path.dirname(path.join(nm, rel)), { recursive: true }); fs.writeFileSync(path.join(nm, rel), 'x'); };
+  mk('n8n/bin/n8n');
+  mk('n8n/dist/commands/start.js');
+  mk('n8n/dist/modules/breaking-changes/breaking-changes.module.js');
+  mk('@n8n/backend-common/index.js');
+  mk('n8n-core/index.js');
+  mk('n8n-workflow/index.js');
+  mk('zod/index.js');
+  mk('@n8n/ai-workflow-builder/dist/workflow-builder-agent.js');
+  mk('@n8n/ai-workflow-builder/dist/agents/planner.agent.js');
+  // deliberately omit langchain files (simulates prune deleting tests/ dir)
+  try {
+    const r = spawnSync(process.execPath, [CHECK, nm], { encoding: 'utf8' });
+    assert.notEqual(r.status, 0, 'should fail when langchain runtime files are missing');
+    assert.match(r.stdout + r.stderr, /langchain/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

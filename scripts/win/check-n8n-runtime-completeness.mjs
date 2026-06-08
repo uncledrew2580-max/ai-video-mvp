@@ -60,6 +60,16 @@ need('n8n-workflow', { dir: true });
 // 4) start command (n8n CLI loads dist/commands/start.js for `n8n start`).
 need('n8n/dist/commands/start.js');
 
+// 5a) langchain runtime — langchain/dist/index.cjs requires ./agents/tests/utils.cjs
+//     at line 9; this file lives inside dist/ but is named "tests", so a naive prune
+//     (matching on directory name alone) would delete it and break n8n startup.
+need('langchain/dist/index.cjs');
+need('langchain/dist/agents/tests/utils.cjs');
+
+// 5b) @n8n/ai-workflow-builder — loaded by n8n/dist/services/ai-workflow-builder.service.js
+need('@n8n/ai-workflow-builder/dist/workflow-builder-agent.js');
+need('@n8n/ai-workflow-builder/dist/agents/planner.agent.js');
+
 // 5) zod single-instance. n8n 2.x needs ONE shared zod across its tree. Any nested
 // */node_modules/zod yields multiple instances and breaks startup (discriminatedUnion
 // in @n8n/api-types -> masked missing breaking-changes.ee; @n8n/config .alias() patch on

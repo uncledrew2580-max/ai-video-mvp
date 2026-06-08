@@ -149,6 +149,11 @@ function pruneStagingTree(stageDir) {
         // dev dirs are removed unless they contain license/compliance docs; in that
         // case we traverse them so file-level prune keeps the compliance files.
         if (PRUNE_DIRS.has(e.name)) {
+          // Never prune directories that live inside a dist/ tree — they are compiled
+          // runtime output even when named test/tests/__tests__/etc.
+          // e.g. langchain/dist/agents/tests/utils.cjs is required by langchain/dist/index.cjs.
+          const relU = rel.split(path.sep).join('/');
+          if (/(?:^|\/)dist\//.test(relU)) { stack.push(full); continue; }
           if (containsComplianceDoc(full)) { stack.push(full); }
           else { fs.rmSync(full, { recursive: true, force: true }); dirsRm++; }
           continue;
