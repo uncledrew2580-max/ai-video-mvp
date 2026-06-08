@@ -11,6 +11,7 @@
 // Packaging filter guarantees NO darwin/linux/Mach-O/ELF .node ships in the tree.
 // No model calls, no secrets baked in.
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +20,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const OUT_ROOT = path.join(ROOT, 'dist-win');
 const NAME = 'AI-Video-Win-x64-Portable-RC-0001';
 const STAGE = path.join(OUT_ROOT, NAME);
+// P14-B3 client shape: the runnable engineering project tree lives under
+// resources/runtime/ (launcher PROJECT_ROOT). The STAGE root only exposes the
+// small-user surface (AI Video.cmd, 使用说明.txt, tools/, version/manifest).
+const RESOURCES = path.join(STAGE, 'resources');
+const RUNTIME_DIR = path.join(RESOURCES, 'runtime');
 
 const log = (m) => process.stdout.write(`[assemble] ${m}\n`);
 
@@ -205,30 +211,163 @@ function scrubApiKeys(v) {
   return v;
 }
 function sanitizeConfig(rel) {
-  const f = path.join(STAGE, rel);
+  const f = path.join(RUNTIME_DIR, rel);
   if (!fs.existsSync(f)) return;
   try { fs.writeFileSync(f, JSON.stringify(scrubApiKeys(JSON.parse(fs.readFileSync(f, 'utf8'))), null, 2) + '\n'); log(`sanitized ${rel}`); } catch {}
 }
 
-const LAUNCHER_CMD = `@echo off
-REM AI Video — Windows x64 portable launcher (P14-A1).
-REM User data -> %APPDATA%\\AI Video ; outputs -> Documents\\AI Video Outputs.
-REM Final merge uses the bundled clean ffmpeg.exe (absolute path), never PATH ffmpeg.
-setlocal
-set "APP_DIR=%~dp0"
-set "AI_VIDEO_FFMPEG_PATH=%APP_DIR%runtime\\bin\\ffmpeg.exe"
-set "AI_VIDEO_RUNTIME_ROOT=%APPDATA%\\AI Video"
-set "WORKFLOW_DATA_ROOT=%APPDATA%\\AI Video\\workflow-data"
-set "N8N_USER_FOLDER=%APPDATA%\\AI Video\\n8n-user"
-set "AI_VIDEO_LOG_DIR=%APPDATA%\\AI Video\\logs\\launcher"
-set "AI_VIDEO_CONFIG_PATH=%APPDATA%\\AI Video\\config\\local-config.json"
+const crlf = (s) => s.replace(/\r?\n/g, '\r\n');
+
+// Shared env block for both the main entry and the debug entry. %RUNTIME_DIR%
+// must already be set by the caller. User data -> %APPDATA%\AI Video ; outputs ->
+// Documents\AI Video Outputs ; final merge uses the bundled clean ffmpeg.exe
+// (absolute path), never PATH ffmpeg.
+const ENV_BLOCK = `set "NODE_EXE=%RUNTIME_DIR%\\runtime\\bin\\node.exe"
+set "LAUNCHER=%RUNTIME_DIR%\\client\\launcher.mjs"
+set "AI_VIDEO_HOME=%APPDATA%\\AI Video"
+set "AI_VIDEO_FFMPEG_PATH=%RUNTIME_DIR%\\runtime\\bin\\ffmpeg.exe"
+set "AI_VIDEO_RUNTIME_ROOT=%AI_VIDEO_HOME%"
+set "WORKFLOW_DATA_ROOT=%AI_VIDEO_HOME%\\workflow-data"
+set "N8N_USER_FOLDER=%AI_VIDEO_HOME%\\n8n-user"
+set "AI_VIDEO_LOG_DIR=%AI_VIDEO_HOME%\\logs\\launcher"
+set "AI_VIDEO_CONFIG_PATH=%AI_VIDEO_HOME%\\config\\local-config.json"
 set "AI_VIDEO_OUTPUT_DIR=%USERPROFILE%\\Documents\\AI Video Outputs"
 set "REVIEW_ASSET_PORT=18788"
-if not exist "%APPDATA%\\AI Video" mkdir "%APPDATA%\\AI Video"
-if not exist "%AI_VIDEO_OUTPUT_DIR%" mkdir "%AI_VIDEO_OUTPUT_DIR%"
-"%APP_DIR%runtime\\bin\\node.exe" "%APP_DIR%client\\launcher.mjs" %*
+if not exist "%AI_VIDEO_HOME%" mkdir "%AI_VIDEO_HOME%" >nul 2>nul
+if not exist "%AI_VIDEO_LOG_DIR%" mkdir "%AI_VIDEO_LOG_DIR%" >nul 2>nul
+if not exist "%AI_VIDEO_OUTPUT_DIR%" mkdir "%AI_VIDEO_OUTPUT_DIR%" >nul 2>nul`;
+
+// Root main entry (TODO: replace with a real AI Video.exe shell later). Friendly,
+// Chinese guidance, never flash-closes on failure.
+const MAIN_CMD = `@echo off
+chcp 65001 >nul
+title AI Video
+setlocal
+set "APP_DIR=%~dp0"
+set "RUNTIME_DIR=%APP_DIR%resources\\runtime"
+${ENV_BLOCK}
+
+if not exist "%NODE_EXE%" (
+  echo [错误] 找不到运行所需的程序：
+  echo        %NODE_EXE%
+  echo        安装包可能未完整解压，请重新解压整个文件夹后再试。
+  echo.
+  pause
+  exit /b 1
+)
+
+echo.
+echo   AI Video 正在启动，请稍候……
+echo   首次启动可能需要 1-2 分钟，就绪后会自动打开浏览器。
+echo   工作台地址：http://127.0.0.1:18788/
+echo   视频输出目录：%AI_VIDEO_OUTPUT_DIR%
+echo.
+
+REM 后台等待本地服务就绪后自动打开浏览器（失败不影响启动）。
+start "" /b "%NODE_EXE%" "%RUNTIME_DIR%\\scripts\\win\\open-when-ready.mjs" "http://127.0.0.1:18788/" >nul 2>nul
+
+cd /d "%RUNTIME_DIR%"
+"%NODE_EXE%" "%LAUNCHER%" --no-browser
+set "EXITCODE=%ERRORLEVEL%"
+
+if not "%EXITCODE%"=="0" (
+  echo.
+  echo   AI Video 启动失败（错误码 %EXITCODE%）。
+  echo   日志目录：%AI_VIDEO_LOG_DIR%
+  echo   可双击 tools\\Export-Diagnostics.cmd 一键导出诊断包发给我们排查。
+  echo.
+  pause
+  exit /b %EXITCODE%
+)
 endlocal
 `;
+
+// tools/Start-AI-Video-Debug.cmd — verbose launch with a detailed log (live
+// console + tee to file). Lives under tools/, so RUNTIME_DIR is one level up.
+const DEBUG_CMD = `@echo off
+chcp 65001 >nul
+title AI Video（调试模式）
+setlocal
+set "APP_DIR=%~dp0.."
+set "RUNTIME_DIR=%APP_DIR%\\resources\\runtime"
+${ENV_BLOCK}
+set "DEBUGLOG=%AI_VIDEO_LOG_DIR%\\debug-launch.log"
+
+if not exist "%NODE_EXE%" (
+  echo [错误] 找不到运行程序：%NODE_EXE%
+  pause
+  exit /b 1
+)
+
+echo 调试模式启动。详细日志同时写入：
+echo   %DEBUGLOG%
+echo 按 Ctrl+C 可停止。
+echo.
+
+cd /d "%RUNTIME_DIR%"
+echo ===== 调试启动 %date% %time% ===== >> "%DEBUGLOG%"
+"%NODE_EXE%" "%LAUNCHER%" --no-browser 2>&1 | powershell -NoProfile -Command "$input | Tee-Object -FilePath '%DEBUGLOG%'"
+echo.
+echo 调试会话结束。完整日志见：%DEBUGLOG%
+pause
+endlocal
+`;
+
+// tools/Export-Diagnostics.cmd — collect local logs + manifests into a Desktop
+// folder and open it. Local files only; NO model calls, NO uploads.
+const EXPORT_CMD = `@echo off
+chcp 65001 >nul
+title AI Video 诊断导出
+setlocal
+set "APP_DIR=%~dp0.."
+echo 正在导出诊断包（仅本地日志与版本信息，不会上传，也不会调用任何模型）……
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$stamp=Get-Date -Format 'yyyyMMdd-HHmmss'; $dest=Join-Path ([Environment]::GetFolderPath('Desktop')) ('AI-Video-诊断-'+$stamp); New-Item -ItemType Directory -Force -Path $dest | Out-Null; $logs=Join-Path $env:APPDATA 'AI Video\\logs'; if(Test-Path $logs){ Copy-Item $logs (Join-Path $dest 'logs') -Recurse -Force }; $root=Resolve-Path '%APP_DIR%'; foreach($f in @('version.json','runtime-manifest.json','使用说明.txt')){ $p=Join-Path $root $f; if(Test-Path $p){ Copy-Item $p $dest -Force } }; Write-Host ('诊断包已生成：'+$dest); Start-Process $dest"
+echo.
+echo 如果未自动打开，请到桌面查找 AI-Video-诊断-时间戳 文件夹。
+pause
+endlocal
+`;
+
+const USAGE_TXT = `AI Video — 使用说明
+========================================
+
+一、如何启动
+  1. 确保已把整个文件夹完整解压到硬盘（不要在压缩包内直接运行）。
+  2. 双击根目录的 “AI Video.cmd”。
+  3. 第一次启动需要 1-2 分钟，启动完成后会自动打开浏览器，
+     地址是 http://127.0.0.1:18788/ 。
+     如果浏览器没有自动弹出，请手动复制该地址到浏览器打开。
+
+二、首次配置 API Key
+  1. 打开工作台页面后，进入“设置 / 系统”页面。
+  2. 把你的 API Key 填入对应输入框并保存。
+  3. 配置会保存到本机：%APPDATA%\\AI Video\\config\\
+     （不会写回安装目录，升级时不会丢失。）
+
+三、视频输出在哪里
+  生成的视频与素材默认保存在：
+    我的文档\\AI Video Outputs
+  （即 %USERPROFILE%\\Documents\\AI Video Outputs）
+
+四、启动失败怎么办
+  1. AI Video.cmd 窗口不会自动关闭，请先看窗口里的中文提示与日志路径。
+  2. 双击 tools\\Export-Diagnostics.cmd，会在桌面生成一个
+     “AI-Video-诊断-时间戳” 文件夹，把它打包发给我们即可。
+  3. 需要更详细日志时，可双击 tools\\Start-AI-Video-Debug.cmd
+     以调试模式启动，日志会写入 %APPDATA%\\AI Video\\logs\\ 。
+
+提示：本版本为内测候选版（RC），后续会提供 “AI Video.exe” 一键入口。
+`;
+
+// commit hash for traceability: CI env first, then local git, else 'unknown'.
+function resolveCommit() {
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
+  try { return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, timeout: 10000 }).toString('utf8').trim(); }
+  catch { return 'unknown'; }
+}
+function sha256File(file) {
+  return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+}
 
 function main() {
   const nodeExe = path.join(ROOT, 'runtime', 'bin', 'node.exe');
@@ -237,43 +376,77 @@ function main() {
   if (!fs.existsSync(ffExe)) throw new Error('missing runtime/bin/ffmpeg.exe (run build-ffmpeg-lgpl.sh)');
 
   fs.rmSync(OUT_ROOT, { recursive: true, force: true });
-  fs.mkdirSync(STAGE, { recursive: true });
+  // The full runnable project tree goes under resources/runtime/ (PROJECT_ROOT).
+  fs.mkdirSync(RUNTIME_DIR, { recursive: true });
 
   for (const item of INCLUDE) {
     const src = path.join(ROOT, item);
     if (!fs.existsSync(src)) { log(`skip (absent): ${item}`); continue; }
-    copyFiltered(src, path.join(STAGE, item));
-    log(`copied ${item}`);
+    copyFiltered(src, path.join(RUNTIME_DIR, item));
+    log(`copied ${item} -> resources/runtime/`);
   }
 
-  stripNonWin32Addons(path.join(STAGE, 'node_modules'));
-  pruneStagingTree(STAGE);
+  stripNonWin32Addons(path.join(RUNTIME_DIR, 'node_modules'));
+  pruneStagingTree(RUNTIME_DIR);
 
   sanitizeConfig(path.join('config', 'local-config.json'));
   sanitizeConfig(path.join('版本测试', 'config', 'local-config.json'));
 
-  fs.writeFileSync(path.join(STAGE, 'Start-AI-Video.cmd'), LAUNCHER_CMD.replace(/\n/g, '\r\n'));
-  log('wrote Start-AI-Video.cmd');
+  // resources/app + resources/licenses placeholders (app shell is future work).
+  fs.mkdirSync(path.join(RESOURCES, 'app'), { recursive: true });
+  fs.mkdirSync(path.join(RESOURCES, 'licenses'), { recursive: true });
+  fs.writeFileSync(path.join(RESOURCES, 'app', 'README.txt'),
+    crlf('（占位）后续将在此放置 AI Video.exe 外壳与图标资源。当前 RC 由 AI Video.cmd 启动。\n'));
+  fs.writeFileSync(path.join(RESOURCES, 'licenses', 'NOTICE.txt'),
+    crlf('第三方依赖的许可证文件随各自包保留在 resources/runtime/node_modules 内。\nffmpeg 为干净的 LGPL 构建（无 gpl/x264/x265）。\n'));
+
+  // Small-user surface at the staging root.
+  fs.writeFileSync(path.join(STAGE, 'AI Video.cmd'), crlf(MAIN_CMD));
+  fs.writeFileSync(path.join(STAGE, '使用说明.txt'), crlf(USAGE_TXT));
+  fs.mkdirSync(path.join(STAGE, 'tools'), { recursive: true });
+  fs.writeFileSync(path.join(STAGE, 'tools', 'Start-AI-Video-Debug.cmd'), crlf(DEBUG_CMD));
+  fs.writeFileSync(path.join(STAGE, 'tools', 'Export-Diagnostics.cmd'), crlf(EXPORT_CMD));
+  log('wrote AI Video.cmd, 使用说明.txt, tools/*.cmd, resources/{app,licenses}');
 
   const nodeVer = execFileSync(nodeExe, ['--version'], { timeout: 20000 }).toString('utf8').trim();
   const ffVer = execFileSync(ffExe, ['-hide_banner', '-version'], { timeout: 20000 }).toString('utf8');
+  const ffSha = sha256File(ffExe);
+  const commit = resolveCommit();
+  const builtAt = new Date().toISOString();
   const manifest = {
     name: NAME,
     platform: 'win32-x64',
-    built_at: new Date().toISOString(),
+    built_at: builtAt,
+    commit,
     node_exe_version: nodeVer,
     ffmpeg_version: ffVer.split('\n')[0],
     ffmpeg_configuration: (ffVer.split('\n').find((l) => l.startsWith('configuration:')) || '').trim(),
+    ffmpeg_sha256: ffSha,
+    zip_sha256: '', // filled by zip-windows-portable.mjs after compression
     final_merge: 'stream copy (-c copy) via AI_VIDEO_FFMPEG_PATH absolute path',
+    project_root: 'resources/runtime',
     user_data_dir: '%APPDATA%\\AI Video',
     output_dir: '%USERPROFILE%\\Documents\\AI Video Outputs',
-    note: 'portable zip; no installer/MSI; no API keys baked in; non-win32 .node stripped',
+    note: 'portable zip; client-shaped (engineering tree under resources/runtime); no installer/MSI; no API keys baked in; non-win32 .node stripped',
+  };
+  const version = {
+    name: 'AI Video',
+    channel: 'rc',
+    version: '0.0.0-rc',
+    platform: 'win32-x64',
+    built_at: builtAt,
+    commit,
+    entry: 'AI Video.cmd',
+    note: 'RC main entry is AI Video.cmd (TODO: AI Video.exe shell later)',
   };
   fs.mkdirSync(OUT_ROOT, { recursive: true });
-  fs.writeFileSync(path.join(OUT_ROOT, 'runtime-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-  fs.writeFileSync(path.join(STAGE, 'runtime-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-  log(`staged. node ${nodeVer} | ${manifest.ffmpeg_version}`);
-  log(`staging tree: ${STAGE}`);
+  const manifestJson = JSON.stringify(manifest, null, 2) + '\n';
+  fs.writeFileSync(path.join(OUT_ROOT, 'runtime-manifest.json'), manifestJson);
+  fs.writeFileSync(path.join(STAGE, 'runtime-manifest.json'), manifestJson);
+  fs.writeFileSync(path.join(STAGE, 'version.json'), JSON.stringify(version, null, 2) + '\n');
+  log(`staged. node ${nodeVer} | ${manifest.ffmpeg_version} | commit ${commit.slice(0, 12)}`);
+  log(`client root: ${STAGE}`);
+  log(`project root: ${RUNTIME_DIR}`);
   printStagingStats(STAGE);
 }
 main();

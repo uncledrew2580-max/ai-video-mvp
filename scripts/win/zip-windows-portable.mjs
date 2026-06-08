@@ -47,6 +47,14 @@ if (!fs.existsSync(ZIP) || fs.statSync(ZIP).size === 0) { process.stderr.write('
 const sizeMB = (fs.statSync(ZIP).size / 1048576).toFixed(1);
 const sha = createHash('sha256').update(fs.readFileSync(ZIP)).digest('hex');
 fs.writeFileSync(`${ZIP}.sha256`, `${sha}  ${path.basename(ZIP)}\n`);
+// Backfill the out-of-zip runtime-manifest.json with the final zip SHA256.
+const manifestPath = path.join(OUT_ROOT, 'runtime-manifest.json');
+try {
+  const m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  m.zip_sha256 = sha;
+  fs.writeFileSync(manifestPath, JSON.stringify(m, null, 2) + '\n');
+  process.stdout.write('[zip] updated runtime-manifest.json zip_sha256\n');
+} catch (e) { process.stdout.write(`[zip] manifest zip_sha256 backfill skipped: ${e.message}\n`); }
 process.stdout.write(`[zip] method: ${method} | ${((Date.now() - t0) / 1000).toFixed(1)}s\n`);
 process.stdout.write(`[zip] path:   ${ZIP} (${sizeMB} MB)\n`);
 process.stdout.write(`[zip] sha256: ${sha}\n`);
