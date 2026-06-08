@@ -1,0 +1,121 @@
+name: Windows Real Smoke — Image Only (P14-B6)
+
+# P14-B6: Manual real-smoke — runs ONLY through image generation, then stops.
+# Veo, video, and merge operations are blocked at the guard level (smoke-guard.mjs).
+# API keys come exclusively from GitHub Secrets; masked before any log output.
+#
+# IMPORTANT: This workflow MUST NOT trigger automatically.
+# on: intentionally contains ONLY workflow_dispatch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: >
+          Run ID of windows-portable.yml to download B5 artifact from.
+          Leave blank to skip n8n start (API-key smoke only).
+        required: false
+        default: ''
+      image_model:
+        description: 'KIE image model override (default: nano-banana-pro)'
+        required: false
+        default: 'nano-banana-pro'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  smoke-image-only:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      REAL_SMOKE_SCOPE: image_only
+      DISABLE_VIDEO_GENERATION: 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24.14.0
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.14.0'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Mask secrets before any other step can log them.
+      # Fails immediately if AI_VIDEO_API_KEY is not configured.
+      - name: Mask API key and base URL (::add-mask::)
+        shell: pwsh
+        env:
+          AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
+          AI_VIDEO_BASE_URL: ${{ secrets.AI_VIDEO_BASE_URL }}
+        run: |
+          $key = ($env:AI_VIDEO_API_KEY ?? '').Trim()
+          if (-not $key) {
+            Write-Error 'AI_VIDEO_API_KEY secret is not configured. Set it in repo Settings → Secrets → Actions.'
+            exit 1
+          }
+          Write-Host "::add-mask::$key"
+          $baseUrl = ($env:AI_VIDEO_BASE_URL ?? '').Trim()
+          if ($baseUrl) { Write-Host "::add-mask::$baseUrl" }
+
+      - name: Syntax check smoke scripts (node --check)
+        shell: pwsh
+        run: |
+          node --check scripts/win/smoke-guard.mjs
+          node --check scripts/win/smoke-image-only.mjs
+
+      # Run guard selfTest: confirms all forbidden-operation guards throw before
+      # any network activity happens.
+      - name: Guard self-test (forbidden-operation guards must throw)
+        shell: pwsh
+        env:
+          REAL_SMOKE_SCOPE: image_only
+          DISABLE_VIDEO_GENERATION: 'true'
+        run: >-
+          node -e
+          "import('./scripts/win/smoke-guard.mjs').then(m => m.selfTest()).catch(e => { console.error(e.message); process.exit(1); })"
+
+      # Download B5 portable artifact only when the caller supplies a run_id.
+      # continue-on-error keeps the smoke runnable as an API-only check if download fails.
+      - name: Download B5 portable artifact (if run_id specified)
+        if: ${{ github.event.inputs.artifact_run_id != '' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run download "${{ github.event.inputs.artifact_run_id }}" `
+            --name AI-Video-Win-x64-Portable-RC-0001 `
+            --dir dist-win
+        continue-on-error: true
+
+      # Real smoke: guard enforced at process entry, stops after image generation.
+      # Veo and video operations cannot run — smoke-guard.mjs throws immediately.
+      - name: Run real smoke — image generation only
+        shell: pwsh
+        env:
+          AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
+          AI_VIDEO_BASE_URL: ${{ secrets.AI_VIDEO_BASE_URL }}
+          AI_VIDEO_IMAGE_MODEL: ${{ github.event.inputs.image_model }}
+          REAL_SMOKE_SCOPE: image_only
+          DISABLE_VIDEO_GENERATION: 'true'
+        run: node scripts/win/smoke-image-only.mjs
+
+      - name: Upload smoke report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-report-image-only
+          path: smoke-report.json
+          if-no-files-found: warn
+
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: smoke-diagnostics
+          path: smoke-diagnostics/
+          if-no-files-found: warn
