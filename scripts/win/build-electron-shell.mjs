@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// P14-B5R1: Build the Windows Electron desktop shell (win32-x64, unpacked dir).
+// P14-B5: Build the Windows Electron desktop shell (win32-x64, unpacked dir).
 // Runs on the Windows CI runner AFTER npm ci (which downloads the win32-x64
 // Electron binary into node_modules/electron/dist/).
 //
@@ -28,6 +28,18 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const log = (m) => process.stdout.write(`[electron-shell] ${m}\n`);
 
+// Resolve the exact installed Electron version from package-lock.json (lockfile v3).
+// Falls back to 39.2.6 (consistent with devDependencies range) if the lock is absent
+// or the electron entry is missing — this should never happen after npm ci.
+function resolveElectronVersion() {
+  try {
+    const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+    const v = lock?.packages?.['node_modules/electron']?.version;
+    if (v && /^\d+\.\d+\.\d+$/.test(v)) return v;
+  } catch {}
+  return '39.2.6';
+}
+
 // Isolated minimal build dir — contains only the Electron app source.
 // electron-builder runs from here so it never touches ROOT/node_modules.
 const BUILD_DIR = path.join(ROOT, 'dist-win-electron-build');
@@ -43,11 +55,11 @@ function main() {
     throw new Error(`electron.exe not found at ${electronExe} — npm ci must run on the Windows runner first`);
   }
 
-  // Read installed electron version — required in config so electron-builder
-  // doesn't try to resolve it from the isolated build dir's node_modules.
-  const electronPkg = path.join(ROOT, 'node_modules', 'electron', 'package.json');
-  const electronVersion = JSON.parse(fs.readFileSync(electronPkg, 'utf8')).version;
-  log(`electron dist: ${electronDist} (v${electronVersion})`);
+  // Resolve exact Electron version from package-lock.json so the isolated build
+  // dir's package.json carries a pinned devDependencies.electron entry and the
+  // generated config carries electronVersion — both without node_modules in BUILD_DIR.
+  const electronVersion = resolveElectronVersion();
+  log(`electron dist: ${electronDist} (v${electronVersion}, source: package-lock.json)`);
 
   // Verify icon.ico exists.
   const icoSrc = path.join(ROOT, 'build', 'icon.ico');
@@ -69,15 +81,18 @@ function main() {
   fs.copyFileSync(icoSrc, path.join(BUILD_DIR, 'build', 'icon.ico'));
   log('copied build/icon.ico → build dir');
 
-  // Minimal package.json — no dependencies so electron-builder has nothing to scan.
+  // Minimal package.json with pinned devDependencies.electron (exact, no ^ range).
+  // electron-builder reads devDependencies for version resolution when node_modules
+  // is absent — the exact version prevents the "Cannot compute electron version" error.
   const pkg = {
     name: 'ai-video',
     version: '0.0.0-rc',
     main: 'win-main.cjs',
     description: 'AI Video desktop shell',
+    devDependencies: { electron: electronVersion },
   };
   fs.writeFileSync(path.join(BUILD_DIR, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
-  log('wrote minimal package.json');
+  log(`wrote minimal package.json (electron=${electronVersion})`);
 
   // Inline electron-builder config — all paths relative to BUILD_DIR.
   // electronDist: ../node_modules/electron/dist  → ROOT/node_modules/electron/dist
