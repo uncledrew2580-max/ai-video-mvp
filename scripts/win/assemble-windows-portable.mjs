@@ -234,7 +234,9 @@ set "AI_VIDEO_CONFIG_PATH=%AI_VIDEO_HOME%\\config\\local-config.json"
 set "AI_VIDEO_OUTPUT_DIR=%USERPROFILE%\\Documents\\AI Video Outputs"
 set "REVIEW_ASSET_PORT=18788"
 if not exist "%AI_VIDEO_HOME%" mkdir "%AI_VIDEO_HOME%" >nul 2>nul
+if not exist "%AI_VIDEO_HOME%\\config" mkdir "%AI_VIDEO_HOME%\\config" >nul 2>nul
 if not exist "%AI_VIDEO_LOG_DIR%" mkdir "%AI_VIDEO_LOG_DIR%" >nul 2>nul
+if not exist "%WORKFLOW_DATA_ROOT%" mkdir "%WORKFLOW_DATA_ROOT%" >nul 2>nul
 if not exist "%AI_VIDEO_OUTPUT_DIR%" mkdir "%AI_VIDEO_OUTPUT_DIR%" >nul 2>nul`;
 
 // Root main entry (TODO: replace with a real AI Video.exe shell later). Friendly,

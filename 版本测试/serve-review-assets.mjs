@@ -11,6 +11,7 @@ import {
   getActiveRoute as getActiveRouteFacade,
   getStageStatusLabel as getStageStatusLabelFacade,
 } from '../app-server/services/stage-router.service.mjs';
+import { atomicWriteJson } from './lib/atomic-write.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 // Runtime project data lives in the project root (one level up when running from 版本测试/)
@@ -112,6 +113,13 @@ try {
   try {
     ({ parse: flattedParse } = require(path.join(os.homedir(), '.npm-global', 'lib', 'node_modules', 'n8n', 'node_modules', 'flatted')));
   } catch {}
+}
+
+// P14-B4: ensure the user-data dirs exist before any config/log write so a fresh
+// Windows profile never hits ENOENT on first save. Covers %APPDATA%\AI Video\
+// {config, logs, logs\launcher, workflow-data} (and their mac/linux equivalents).
+for (const _d of [path.dirname(CONFIG_PATH), LOG_ROOT, path.join(LOG_ROOT, 'launcher'), WORKFLOW_DATA_ROOT]) {
+  try { fs.mkdirSync(_d, { recursive: true }); } catch {}
 }
 
 fs.mkdirSync(ROOT, { recursive: true });
@@ -337,6 +345,18 @@ function applyKieConstants(cfg) {
   return normalizeAiConfig(cfg);
 }
 
+// P14-B4: single atomic config writer. Ensures the parent dir of CONFIG_PATH
+// (which can differ from CONFIG_DIR when AI_VIDEO_CONFIG_PATH overrides it, e.g.
+// Windows %APPDATA%\AI Video\config) then writes via tmp->rename. On failure it
+// surfaces a Chinese error with the config path and log dir for diagnostics.
+function writeConfigAtomic(obj) {
+  try {
+    atomicWriteJson(CONFIG_PATH, obj);
+  } catch (e) {
+    throw new Error(`保存配置失败（${e.code || e.message}）。配置文件：${CONFIG_PATH}。日志目录：${LOG_ROOT}`);
+  }
+}
+
 function saveConfig(updates) {
   fs.mkdirSync(CONFIG_DIR, { recursive: true });
   const current = normalizeAiConfig(loadConfig());
@@ -475,9 +495,7 @@ function saveConfig(updates) {
   if (!merged.adapters.image) merged.adapters.image = 'kie_market_image';
   if (!merged.adapters.video) merged.adapters.video = 'kie_veo31';
   const normalized = normalizeAiConfig(merged);
-  const tmp = CONFIG_PATH + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(normalized, null, 2), 'utf8');
-  fs.renameSync(tmp, CONFIG_PATH);
+  writeConfigAtomic(normalized);
 }
 
 function chooseDirectoryWithSystemDialog() {
@@ -575,10 +593,7 @@ function ensureDefaultOutputDirs() {
 
     // Write config whenever dirty OR legacyDirty has entries
     const merged = { ...raw, output: { ...out, ...dirty }, ...legacyDirty };
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    const tmp = CONFIG_PATH + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(merged, null, 2), 'utf8');
-    fs.renameSync(tmp, CONFIG_PATH);
+    writeConfigAtomic(merged);
   } catch {}
 }
 
@@ -8141,9 +8156,7 @@ const server = http.createServer(async (req, res) => {
         const _raw = loadConfig();
         const _merged = { ..._raw, output: { ...(_raw.output || {}), ..._newDirs },
           storyboard_output_dir: _newDirs.storyboard_dir, video_output_dir: _newDirs.video_dir };
-        const _tmp = CONFIG_PATH + '.tmp';
-        fs.writeFileSync(_tmp, JSON.stringify(_merged, null, 2), 'utf8');
-        fs.renameSync(_tmp, CONFIG_PATH);
+        writeConfigAtomic(_merged);
         res.writeHead(200, _hdr);
         return res.end(JSON.stringify({ ok: true, base_dir: _norm }));
 
@@ -8163,9 +8176,7 @@ const server = http.createServer(async (req, res) => {
         const _raw = loadConfig();
         const _merged = { ..._raw, output: { ...(_raw.output || {}), ...DEFAULT_OUTPUT_DIRS },
           storyboard_output_dir: DEFAULT_OUTPUT_DIRS.storyboard_dir, video_output_dir: DEFAULT_OUTPUT_DIRS.video_dir };
-        const _tmp = CONFIG_PATH + '.tmp';
-        fs.writeFileSync(_tmp, JSON.stringify(_merged, null, 2), 'utf8');
-        fs.renameSync(_tmp, CONFIG_PATH);
+        writeConfigAtomic(_merged);
         res.writeHead(200, _hdr);
         return res.end(JSON.stringify({ ok: true, base_dir: DEFAULT_OUTPUT_BASE }));
 
