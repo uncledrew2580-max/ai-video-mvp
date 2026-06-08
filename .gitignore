@@ -19,7 +19,6 @@ dist/
 dist-win/
 build/*
 !build/icon.ico
-!build/icon.iconset
 release-candidates/
 runtime/bin/
 generated-videos/
