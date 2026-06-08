@@ -126,7 +126,7 @@ jobs:
         with:
           name: AI-Video-Win-x64-Portable-RC-0001
           path: |
-            dist-win/AI-Video-Win-x64-Portable-RC-0001.zip
+            dist-win/AI-Video-Win-x64-Portable-RC-0001/
             dist-win/AI-Video-Win-x64-Portable-RC-0001.zip.sha256
             dist-win/runtime-manifest.json
           if-no-files-found: error

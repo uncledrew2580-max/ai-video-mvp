@@ -12,6 +12,7 @@ import {
   getStageStatusLabel as getStageStatusLabelFacade,
 } from '../app-server/services/stage-router.service.mjs';
 import { atomicWriteJson } from './lib/atomic-write.mjs';
+import { normalizeManualOutputBase, ensureOutputDirsWritable } from './lib/output-dirs.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 // Runtime project data lives in the project root (one level up when running from 版本测试/)
@@ -91,8 +92,10 @@ const N8N_HOST = process.env.N8N_HOST || `http://127.0.0.1:${N8N_PORT}`;
 const WF01_WORKFLOW_ID = 'rKHHjD2QBlL6EhaM';
 
 // ── Default output directories ─────────────────────────────────────────────
-// Base is dynamic: ~/Movies/AI Video Outputs/ — resolved at runtime via os.homedir()
-const DEFAULT_OUTPUT_BASE = path.join(os.homedir(), 'Movies', 'AI Video Outputs');
+// Base is platform-aware (no hard-coded username), resolved at runtime via
+// os.homedir(): Windows -> ~/Videos, macOS -> ~/Movies, others -> ~/Videos.
+const DEFAULT_OUTPUT_PARENT = process.platform === 'darwin' ? 'Movies' : 'Videos';
+const DEFAULT_OUTPUT_BASE = path.join(os.homedir(), DEFAULT_OUTPUT_PARENT, 'AI Video Outputs');
 const DEFAULT_OUTPUT_DIRS = {
   base_dir:       DEFAULT_OUTPUT_BASE,
   storyboard_dir: path.join(DEFAULT_OUTPUT_BASE, 'Storyboards'),
@@ -500,7 +503,7 @@ function saveConfig(updates) {
 
 function chooseDirectoryWithSystemDialog() {
   if (process.platform !== 'darwin') {
-    throw new Error('当前版本只支持 macOS 原生目录选择；Windows 客户端会使用 Windows 原生选择框。');
+    throw new Error('当前界面无法在 Windows/Linux 上弹出原生选择框，请直接在输入框粘贴保存路径，或点击“恢复默认位置”。');
   }
   const script = [
     'set chosenFolder to choose folder with prompt "请选择保存文件夹"',
@@ -5393,6 +5396,10 @@ function renderConfigPage(saved = false, error = '') {
         <span style="font-size:18px;">📁</span>
         <code id="output-base-display" style="flex:1;font-size:12px;word-break:break-all;color:#93c5fd;">${htmlEscape(output.base_dir || DEFAULT_OUTPUT_BASE)}</code>
       </div>
+      <div style="margin-bottom:10px;">
+        <input type="text" id="output-base-input" placeholder="粘贴或输入保存文件夹完整路径，例如 D:\\AI Video Outputs" style="width:100%;box-sizing:border-box;font-size:12px;" />
+        <p style="margin:6px 0 0;font-size:11px;color:var(--muted);">在“文件资源管理器”地址栏复制路径粘贴到此处，再点“更改保存位置”。留空且在 macOS 上会弹出系统选择框。</p>
+      </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;">
         <button class="btn btn-primary" type="button" onclick="outputFolderAction('open')" style="font-size:13px;">打开输出文件夹</button>
         <button class="btn btn-secondary" type="button" onclick="outputFolderAction('choose')" style="font-size:13px;">更改保存位置</button>
@@ -5577,10 +5584,27 @@ function renderConfigPage(saved = false, error = '') {
       msgEl.style.border = ok ? '1px solid rgba(34,197,94,.3)' : '1px solid rgba(239,68,68,.3)';
     };
     try {
+      let body = { action };
+      if (action === 'choose') {
+        const inputEl = document.getElementById('output-base-input');
+        const inputVal = inputEl ? inputEl.value.trim() : '';
+        if (inputVal) {
+          body.base_dir = inputVal;
+        } else {
+          const display = document.getElementById('output-base-display');
+          const current = display ? display.textContent.trim() : '';
+          const pathText = prompt('请输入新的保存位置路径（可直接粘贴 Windows 路径）。\n例如：C:\\Users\\你的用户名\\Videos\\AI Video Outputs', current);
+          if (pathText == null || !pathText.trim()) {
+            showMsg('已取消更改保存位置。', true);
+            return;
+          }
+          body.base_dir = pathText.trim();
+        }
+      }
       const r = await fetch('/api/output-folder-action', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action })
+        body: JSON.stringify(body)
       });
       const data = await r.json();
       if (!r.ok || !data.ok) throw new Error(data.error || data.message || '操作失败');
@@ -8127,32 +8151,39 @@ const server = http.createServer(async (req, res) => {
         return res.end(JSON.stringify({ ok: true, path: _expanded }));
 
       } else if (_action === 'choose') {
-        const _chosen = chooseDirectoryWithSystemDialog();
-        const _safe = isOutputPathSafe(_chosen);
-        if (!_safe.ok) {
+        // A manually pasted/typed base_dir (the browser Web UI flow, all platforms)
+        // takes priority. The macOS native dialog is only a fallback when no
+        // base_dir is supplied; on Windows/Linux there is no native picker, so we
+        // return a Chinese hint to paste a path instead of throwing a blocker.
+        const _manual = normalizeManualOutputBase(_body.base_dir);
+        let _norm;
+        if (_manual) {
+          const _safe = isOutputPathSafe(_manual);
+          if (!_safe.ok) {
+            res.writeHead(400, _hdr);
+            return res.end(JSON.stringify({ ok: false, error: _safe.reason }));
+          }
+          _norm = _safe.normalized;
+        } else if (process.platform === 'darwin') {
+          const _chosen = chooseDirectoryWithSystemDialog();
+          const _safe = isOutputPathSafe(_chosen);
+          if (!_safe.ok) {
+            res.writeHead(400, _hdr);
+            return res.end(JSON.stringify({ ok: false, error: _safe.reason }));
+          }
+          _norm = _safe.normalized;
+        } else {
           res.writeHead(400, _hdr);
-          return res.end(JSON.stringify({ ok: false, error: _safe.reason }));
+          return res.end(JSON.stringify({ ok: false, error: '请在输入框粘贴保存路径，或点击恢复默认位置。' }));
         }
-        const _norm = _safe.normalized;
-        const _newDirs = {
-          base_dir:       _norm,
-          storyboard_dir: path.join(_norm, 'Storyboards'),
-          video_dir:      path.join(_norm, 'Videos'),
-          voiceover_dir:  path.join(_norm, 'Voiceovers'),
-          final_dir:      path.join(_norm, 'Final'),
-        };
-        for (const [_ck, _cv] of Object.entries(_newDirs)) {
-          try { fs.mkdirSync(_cv, { recursive: true }); } catch {}
-          const _cst = (() => { try { return fs.statSync(_cv); } catch { return null; } })();
-          if (!_cst || !_cst.isDirectory()) {
-            res.writeHead(500, _hdr);
-            return res.end(JSON.stringify({ ok: false, error: `无法创建目录 ${_ck}，请选择其他位置。` }));
-          }
-          try { const _ct = path.join(_cv, '.write_test_' + Date.now()); fs.writeFileSync(_ct, ''); fs.unlinkSync(_ct); } catch {
-            res.writeHead(500, _hdr);
-            return res.end(JSON.stringify({ ok: false, error: `目录不可写 ${_ck}，请检查权限。` }));
-          }
+        // Create the canonical Storyboards/Videos/Voiceovers/Final layout and
+        // write-probe each dir (handles Windows backslashes/spaces/Chinese paths).
+        const _ensured = ensureOutputDirsWritable(_norm);
+        if (!_ensured.ok) {
+          res.writeHead(500, _hdr);
+          return res.end(JSON.stringify({ ok: false, error: _ensured.error }));
         }
+        const _newDirs = _ensured.dirs;
         const _raw = loadConfig();
         const _merged = { ..._raw, output: { ...(_raw.output || {}), ..._newDirs },
           storyboard_output_dir: _newDirs.storyboard_dir, video_output_dir: _newDirs.video_dir };
