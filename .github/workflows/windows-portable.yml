@@ -11,9 +11,12 @@ on:
     paths:
       - '.github/workflows/windows-portable.yml'
       - 'scripts/win/**'
+      - 'desktop/win-main.cjs'
+      - 'electron-builder-win.json'
       - 'tests/nonpaid/p14-windows-final-merge.test.mjs'
       - 'tests/nonpaid/p14-windows-config-init.test.mjs'
       - 'tests/nonpaid/p14-windows-output-dirs.test.mjs'
+      - 'tests/nonpaid/p14-windows-desktop-shell.test.mjs'
 
 permissions:
   contents: read
@@ -103,15 +106,32 @@ jobs:
           node --test tests/nonpaid/p14-windows-config-init.test.mjs
           node --test tests/nonpaid/p14-windows-output-dirs.test.mjs
 
+      # P14-B5: Build the Electron win32-x64 desktop shell from the freshly
+      # installed node_modules/electron/dist on this Windows runner.
+      - name: Build Electron shell (win32-x64, AI Video.exe + icon)
+        shell: pwsh
+        run: node scripts/win/build-electron-shell.mjs
+
       - name: Assemble portable staging tree (filter non-win32 native modules)
         shell: pwsh
         run: node scripts/win/assemble-windows-portable.mjs
 
-      # P14-B3: enforce the small-user "client" shape (engineering tree hidden
-      # under resources/runtime/) after assemble and before zip.
+      # P14-B5 nonpaid: desktop shell shape checks against mock dirs (offline, no
+      # model calls). Run after assemble so the real staging tree is available too.
+      - name: Windows nonpaid tests (desktop shell + client-shape P14-B5)
+        shell: pwsh
+        run: node --test tests/nonpaid/p14-windows-desktop-shell.test.mjs
+
+      # P14-B3/B5: enforce the small-user "client" shape (engineering tree hidden
+      # under resources/runtime/; AI Video.exe at root, cmd at tools/).
       - name: Verify portable client shape (small-user layout, no project dump)
         shell: pwsh
         run: node scripts/win/check-client-shape.mjs "dist-win/AI-Video-Win-x64-Portable-RC-0001"
+
+      # P14-B5: verify AI Video.exe is a valid win32-x64 PE and resources/app/ is present.
+      - name: Verify desktop shell (AI Video.exe + Electron app code)
+        shell: pwsh
+        run: node scripts/win/check-desktop-shell.mjs "dist-win/AI-Video-Win-x64-Portable-RC-0001"
 
       - name: Verify ARTIFACT TREE native modules are win32-x64 (no darwin/linux)
         shell: pwsh

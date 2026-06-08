@@ -17,7 +17,9 @@ node_modules/
 **/node_modules/
 dist/
 dist-win/
-build/
+build/*
+!build/icon.ico
+!build/icon.iconset
 release-candidates/
 runtime/bin/
 generated-videos/

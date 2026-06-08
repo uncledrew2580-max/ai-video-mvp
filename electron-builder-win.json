@@ -1,0 +1,24 @@
+{
+  "appId": "com.aivideo.workbench",
+  "productName": "AI Video",
+  "asar": false,
+  "npmRebuild": false,
+  "electronDist": "node_modules/electron/dist",
+  "directories": {
+    "output": "dist-win-electron"
+  },
+  "files": [
+    {
+      "from": "desktop",
+      "to": ".",
+      "filter": ["win-main.cjs"]
+    }
+  ],
+  "extraMetadata": {
+    "main": "win-main.cjs"
+  },
+  "win": {
+    "target": [{ "target": "dir", "arch": ["x64"] }],
+    "icon": "build/icon"
+  }
+}

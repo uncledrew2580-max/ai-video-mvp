@@ -20,11 +20,12 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const OUT_ROOT = path.join(ROOT, 'dist-win');
 const NAME = 'AI-Video-Win-x64-Portable-RC-0001';
 const STAGE = path.join(OUT_ROOT, NAME);
-// P14-B3 client shape: the runnable engineering project tree lives under
-// resources/runtime/ (launcher PROJECT_ROOT). The STAGE root only exposes the
-// small-user surface (AI Video.cmd, 使用说明.txt, tools/, version/manifest).
+// P14-B5: STAGE root exposes AI Video.exe (Electron shell) + Electron support
+// files + tools/ + manifests. Engineering tree is under resources/runtime/.
 const RESOURCES = path.join(STAGE, 'resources');
 const RUNTIME_DIR = path.join(RESOURCES, 'runtime');
+// Electron desktop shell built by build-electron-shell.mjs before assembly.
+const ELECTRON_UNPACKED = path.join(ROOT, 'dist-win-electron', 'win-unpacked');
 
 const log = (m) => process.stdout.write(`[assemble] ${m}\n`);
 
@@ -239,14 +240,15 @@ if not exist "%AI_VIDEO_LOG_DIR%" mkdir "%AI_VIDEO_LOG_DIR%" >nul 2>nul
 if not exist "%WORKFLOW_DATA_ROOT%" mkdir "%WORKFLOW_DATA_ROOT%" >nul 2>nul
 if not exist "%AI_VIDEO_OUTPUT_DIR%" mkdir "%AI_VIDEO_OUTPUT_DIR%" >nul 2>nul`;
 
-// Root main entry (TODO: replace with a real AI Video.exe shell later). Friendly,
-// Chinese guidance, never flash-closes on failure.
+// P14-B5: tools/AI Video (命令行模式).cmd — cmd-mode fallback for power users /
+// debug, no longer the root main entry (AI Video.exe is the primary entry).
+// APP_DIR is the portable root (tools/../), RUNTIME_DIR one level deeper.
 const MAIN_CMD = `@echo off
 chcp 65001 >nul
-title AI Video
+title AI Video（命令行模式）
 setlocal
-set "APP_DIR=%~dp0"
-set "RUNTIME_DIR=%APP_DIR%resources\\runtime"
+set "APP_DIR=%~dp0.."
+set "RUNTIME_DIR=%APP_DIR%\\resources\\runtime"
 ${ENV_BLOCK}
 
 if not exist "%NODE_EXE%" (
@@ -259,7 +261,7 @@ if not exist "%NODE_EXE%" (
 )
 
 echo.
-echo   AI Video 正在启动，请稍候……
+echo   AI Video 正在启动（命令行模式），请稍候……
 echo   首次启动可能需要 1-2 分钟，就绪后会自动打开浏览器。
 echo   工作台地址：http://127.0.0.1:18788/
 echo   视频输出目录：%AI_VIDEO_OUTPUT_DIR%
@@ -276,11 +278,49 @@ if not "%EXITCODE%"=="0" (
   echo.
   echo   AI Video 启动失败（错误码 %EXITCODE%）。
   echo   日志目录：%AI_VIDEO_LOG_DIR%
-  echo   可双击 tools\\Export-Diagnostics.cmd 一键导出诊断包发给我们排查。
+  echo   可双击 Export-Diagnostics.cmd 一键导出诊断包发给我们排查。
   echo.
   pause
   exit /b %EXITCODE%
 )
+endlocal
+`;
+
+// tools/Open-Logs.cmd — open the user-data log directory in Explorer.
+const OPEN_LOGS_CMD = `@echo off
+chcp 65001 >nul
+title AI Video — 打开日志目录
+setlocal
+set "LOGDIR=%APPDATA%\\AI Video\\logs"
+if not exist "%LOGDIR%" (
+  echo 日志目录尚不存在：%LOGDIR%
+  echo 请先启动 AI Video 至少一次后再试。
+  pause
+  exit /b 0
+)
+explorer "%LOGDIR%"
+endlocal
+`;
+
+// 创建桌面快捷方式.cmd — root-level helper, creates an LNK pointing to AI Video.exe.
+const SHORTCUT_CMD = `@echo off
+chcp 65001 >nul
+title AI Video — 创建桌面快捷方式
+setlocal
+set "APP_DIR=%~dp0"
+set "EXE=%APP_DIR%AI Video.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ws=New-Object -ComObject WScript.Shell; ^
+   $lnk=$ws.CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath('Desktop'),'AI Video.lnk')); ^
+   $lnk.TargetPath='%EXE:\=\\%'; ^
+   $lnk.WorkingDirectory='%APP_DIR:\=\\%'; ^
+   $lnk.IconLocation='%EXE:\=\\%,0'; ^
+   $lnk.Description='AI Video 工作台'; ^
+   $lnk.Save(); ^
+   Write-Host '快捷方式已创建到桌面。'"
+echo.
+echo 如果成功，桌面会出现 "AI Video" 图标，双击即可启动。
+pause
 endlocal
 `;
 
@@ -335,30 +375,34 @@ const USAGE_TXT = `AI Video — 使用说明
 
 一、如何启动
   1. 确保已把整个文件夹完整解压到硬盘（不要在压缩包内直接运行）。
-  2. 双击根目录的 “AI Video.cmd”。
-  3. 第一次启动需要 1-2 分钟，启动完成后会自动打开浏览器，
-     地址是 http://127.0.0.1:18788/ 。
-     如果浏览器没有自动弹出，请手动复制该地址到浏览器打开。
+  2. 双击根目录的 “AI Video.exe”。
+  3. 第一次启动需要 1-2 分钟，启动完成后客户端窗口会自动加载工作台。
+     如未自动加载，工作台地址为 http://127.0.0.1:18788/ 。
 
-二、首次配置 API Key
-  1. 打开工作台页面后，进入“设置 / 系统”页面。
+二、创建桌面快捷方式（可选）
+  双击根目录的 “创建桌面快捷方式.cmd”，桌面上会出现 “AI Video” 图标，
+  以后双击图标即可启动。
+
+三、首次配置 API Key
+  1. 打开工作台页面后，进入”设置 / 系统”页面。
   2. 把你的 API Key 填入对应输入框并保存。
   3. 配置会保存到本机：%APPDATA%\\AI Video\\config\\
      （不会写回安装目录，升级时不会丢失。）
 
-三、视频输出在哪里
+四、视频输出在哪里
   生成的视频与素材默认保存在：
     我的文档\\AI Video Outputs
   （即 %USERPROFILE%\\Documents\\AI Video Outputs）
 
-四、启动失败怎么办
-  1. AI Video.cmd 窗口不会自动关闭，请先看窗口里的中文提示与日志路径。
-  2. 双击 tools\\Export-Diagnostics.cmd，会在桌面生成一个
+五、启动失败怎么办
+  1. 双击 tools\\Export-Diagnostics.cmd，会在桌面生成一个
      “AI-Video-诊断-时间戳” 文件夹，把它打包发给我们即可。
-  3. 需要更详细日志时，可双击 tools\\Start-AI-Video-Debug.cmd
-     以调试模式启动，日志会写入 %APPDATA%\\AI Video\\logs\\ 。
+  2. 需要命令行模式或更详细日志时，可双击：
+       tools\\AI Video (命令行模式).cmd
+       tools\\Start-AI-Video-Debug.cmd
+  3. 双击 tools\\Open-Logs.cmd 可直接打开日志目录。
 
-提示：本版本为内测候选版（RC），后续会提供 “AI Video.exe” 一键入口。
+本版本为内测候选版（RC）。
 `;
 
 // commit hash for traceability: CI env first, then local git, else 'unknown'.
@@ -394,21 +438,35 @@ function main() {
   sanitizeConfig(path.join('config', 'local-config.json'));
   sanitizeConfig(path.join('版本测试', 'config', 'local-config.json'));
 
-  // resources/app + resources/licenses placeholders (app shell is future work).
-  fs.mkdirSync(path.join(RESOURCES, 'app'), { recursive: true });
+  // P14-B5: Copy Electron desktop shell (AI Video.exe + DLLs + PAKs + locales +
+  // resources/app/) from the pre-built ELECTRON_UNPACKED dir into staging root.
+  // build-electron-shell.mjs must run before assemble on the Windows CI runner.
+  if (!fs.existsSync(ELECTRON_UNPACKED)) {
+    throw new Error(
+      `Electron unpacked output not found: ${ELECTRON_UNPACKED}\n` +
+      `Run 'node scripts/win/build-electron-shell.mjs' first (requires Windows runner with npm ci).`
+    );
+  }
+  fs.cpSync(ELECTRON_UNPACKED, STAGE, { recursive: true });
+  log(`copied Electron shell: ${ELECTRON_UNPACKED} -> ${STAGE}`);
+
+  // licenses notice alongside the runtime tree.
   fs.mkdirSync(path.join(RESOURCES, 'licenses'), { recursive: true });
-  fs.writeFileSync(path.join(RESOURCES, 'app', 'README.txt'),
-    crlf('（占位）后续将在此放置 AI Video.exe 外壳与图标资源。当前 RC 由 AI Video.cmd 启动。\n'));
   fs.writeFileSync(path.join(RESOURCES, 'licenses', 'NOTICE.txt'),
     crlf('第三方依赖的许可证文件随各自包保留在 resources/runtime/node_modules 内。\nffmpeg 为干净的 LGPL 构建（无 gpl/x264/x265）。\n'));
 
-  // Small-user surface at the staging root.
-  fs.writeFileSync(path.join(STAGE, 'AI Video.cmd'), crlf(MAIN_CMD));
+  // User-facing surface at the staging root: shortcut helper + usage text.
+  // Primary entry is AI Video.exe (copied from Electron unpacked above).
+  fs.writeFileSync(path.join(STAGE, '创建桌面快捷方式.cmd'), crlf(SHORTCUT_CMD));
   fs.writeFileSync(path.join(STAGE, '使用说明.txt'), crlf(USAGE_TXT));
+
+  // tools/: cmd-mode fallback + debug + diagnostics + log opener.
   fs.mkdirSync(path.join(STAGE, 'tools'), { recursive: true });
+  fs.writeFileSync(path.join(STAGE, 'tools', 'AI Video (命令行模式).cmd'), crlf(MAIN_CMD));
   fs.writeFileSync(path.join(STAGE, 'tools', 'Start-AI-Video-Debug.cmd'), crlf(DEBUG_CMD));
   fs.writeFileSync(path.join(STAGE, 'tools', 'Export-Diagnostics.cmd'), crlf(EXPORT_CMD));
-  log('wrote AI Video.cmd, 使用说明.txt, tools/*.cmd, resources/{app,licenses}');
+  fs.writeFileSync(path.join(STAGE, 'tools', 'Open-Logs.cmd'), crlf(OPEN_LOGS_CMD));
+  log('wrote 创建桌面快捷方式.cmd, 使用说明.txt, tools/{AI Video (命令行模式),Start-AI-Video-Debug,Export-Diagnostics,Open-Logs}.cmd, resources/licenses');
 
   const nodeVer = execFileSync(nodeExe, ['--version'], { timeout: 20000 }).toString('utf8').trim();
   const ffVer = execFileSync(ffExe, ['-hide_banner', '-version'], { timeout: 20000 }).toString('utf8');
@@ -438,8 +496,8 @@ function main() {
     platform: 'win32-x64',
     built_at: builtAt,
     commit,
-    entry: 'AI Video.cmd',
-    note: 'RC main entry is AI Video.cmd (TODO: AI Video.exe shell later)',
+    entry: 'AI Video.exe',
+    note: 'portable RC; primary entry is AI Video.exe (Electron desktop shell); cmd-mode fallback at tools/AI Video (命令行模式).cmd',
   };
   fs.mkdirSync(OUT_ROOT, { recursive: true });
   const manifestJson = JSON.stringify(manifest, null, 2) + '\n';

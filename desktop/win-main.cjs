@@ -1,0 +1,230 @@
+'use strict';
+// P14-B5: Windows Electron desktop shell.
+// Packaged by electron-builder --win dir; lives in resources/app/win-main.cjs.
+// PROJECT_ROOT (n8n backend) = resources/runtime/ (sibling to resources/app/).
+const { app, BrowserWindow, dialog, shell } = require('electron');
+const { spawn } = require('node:child_process');
+const http = require('node:http');
+const path = require('node:path');
+const fs = require('node:fs');
+
+const UI_PORT = process.env.AI_VIDEO_UI_PORT || '18788';
+const N8N_PORT = process.env.AI_VIDEO_N8N_PORT || '5678';
+const UI_URL = `http://127.0.0.1:${UI_PORT}/`;
+
+// __dirname = resources/app/  →  runtime is resources/runtime/
+const PROJECT_ROOT = path.resolve(__dirname, '..', 'runtime');
+const NODE_EXE = path.join(PROJECT_ROOT, 'runtime', 'bin', 'node.exe');
+const LAUNCHER = path.join(PROJECT_ROOT, 'client', 'launcher.mjs');
+const FFMPEG_EXE = path.join(PROJECT_ROOT, 'runtime', 'bin', 'ffmpeg.exe');
+
+let mainWindow;
+let launcherProcess;
+let isQuitting = false;
+
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+  process.exit(0);
+}
+
+function logDir() {
+  return path.join(app.getPath('appData'), 'AI Video', 'logs', 'launcher');
+}
+
+function httpOk(url, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      res.resume();
+      resolve(res.statusCode < 500);
+    });
+    req.on('error', () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve(false); });
+  });
+}
+
+async function waitForUi(timeoutMs = 90000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await httpOk(UI_URL)) return true;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  return false;
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1440,
+    height: 950,
+    minWidth: 1180,
+    minHeight: 760,
+    title: 'AI Video',
+    backgroundColor: '#edf4fb',
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  mainWindow.removeMenu();
+
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.show();
+    mainWindow.focus();
+  });
+
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const local = (u) =>
+      u.startsWith(`http://127.0.0.1:${UI_PORT}`) ||
+      u.startsWith(`http://localhost:${UI_PORT}`) ||
+      u.startsWith(`http://127.0.0.1:${N8N_PORT}`) ||
+      u.startsWith(`http://localhost:${N8N_PORT}`);
+    if (local(url)) { mainWindow.loadURL(url); return { action: 'deny' }; }
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const local = (u) =>
+      u.startsWith('data:') ||
+      u.startsWith(`http://127.0.0.1:${UI_PORT}`) ||
+      u.startsWith(`http://localhost:${UI_PORT}`) ||
+      u.startsWith(`http://127.0.0.1:${N8N_PORT}`) ||
+      u.startsWith(`http://localhost:${N8N_PORT}`);
+    if (!local(url)) { event.preventDefault(); shell.openExternal(url); }
+  });
+
+  mainWindow.webContents.on('did-finish-load', () => {
+    injectWorkbenchButton();
+  });
+
+  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
+    <!doctype html><html lang="zh-CN">
+    <head><meta charset="utf-8"><title>AI Video</title>
+    <style>
+      *{box-sizing:border-box}
+      body{margin:0;height:100vh;display:grid;place-items:center;
+        font-family:"Segoe UI",system-ui,sans-serif;color:#0f172a;
+        background:radial-gradient(circle at 18% 16%,rgba(59,130,246,.20),transparent 32%),
+          radial-gradient(circle at 82% 20%,rgba(14,165,233,.16),transparent 30%),
+          linear-gradient(135deg,#f8fbff 0%,#eaf2fb 100%)}
+      .card{width:min(560px,calc(100vw - 48px));padding:34px 36px;
+        border:1px solid rgba(148,163,184,.28);border-radius:18px;
+        background:rgba(255,255,255,.78);box-shadow:0 26px 80px rgba(15,23,42,.12)}
+      h1{margin:0 0 12px;font-size:32px}
+      p{margin:0;color:#475569;font-size:16px;line-height:1.75}
+      .bar{margin-top:26px;height:8px;overflow:hidden;border-radius:999px;background:#dbeafe}
+      .bar::before{content:"";display:block;height:100%;width:42%;border-radius:inherit;
+        background:linear-gradient(90deg,#2563eb,#06b6d4);
+        animation:move 1.15s ease-in-out infinite alternate}
+      @keyframes move{from{transform:translateX(-20%)}to{transform:translateX(160%)}}
+    </style></head>
+    <body><section class="card">
+      <h1>AI Video 正在启动</h1>
+      <p>正在自动启动本地引擎和视频工作台，第一次启动可能需要稍等一会儿。</p>
+      <div class="bar"></div>
+    </section></body></html>
+  `)}`);
+}
+
+function injectWorkbenchButton() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const url = mainWindow.webContents.getURL();
+  if (!url.startsWith('http://')) return;
+  mainWindow.webContents.executeJavaScript(`
+    (() => {
+      const id = 'ai-video-return-wb';
+      if (document.getElementById(id)) return;
+      const btn = document.createElement('button');
+      btn.id = id; btn.type = 'button'; btn.textContent = '回到工作台';
+      Object.assign(btn.style, {
+        position:'fixed',right:'18px',bottom:'18px',zIndex:'2147483647',
+        padding:'12px 18px',border:'1px solid rgba(37,99,235,.35)',
+        borderRadius:'999px',background:'linear-gradient(135deg,#2563eb,#06b6d4)',
+        color:'#fff',fontSize:'15px',fontWeight:'800',
+        boxShadow:'0 18px 42px rgba(37,99,235,.30)',cursor:'pointer'
+      });
+      btn.addEventListener('click', () => { window.location.href = ${JSON.stringify(UI_URL)}; });
+      document.documentElement.appendChild(btn);
+    })();
+  `).catch(() => {});
+}
+
+function startLauncher() {
+  if (!fs.existsSync(NODE_EXE)) {
+    dialog.showErrorBox(
+      'AI Video — 缺少运行环境',
+      `找不到捆绑的 Node.js 可执行文件，安装包可能未完整解压。\n\n期望路径：\n${NODE_EXE}\n\n请重新解压整个文件夹后再试。`
+    );
+    app.quit();
+    return;
+  }
+
+  const env = {
+    ...process.env,
+    AI_VIDEO_NO_BROWSER: '1',
+    AI_VIDEO_APP_MODE: '1',
+    REVIEW_ASSET_PORT: UI_PORT,
+    N8N_PORT,
+    N8N_HOST: `http://127.0.0.1:${N8N_PORT}`,
+    PROJECT_ROOT,
+    AI_VIDEO_FFMPEG_PATH: FFMPEG_EXE,
+    AI_VIDEO_HOME: path.join(app.getPath('appData'), 'AI Video'),
+  };
+
+  launcherProcess = spawn(NODE_EXE, [LAUNCHER, '--no-browser'], {
+    cwd: PROJECT_ROOT,
+    env,
+    stdio: 'pipe',
+  });
+
+  launcherProcess.stdout.on('data', (d) => process.stdout.write(d));
+  launcherProcess.stderr.on('data', (d) => process.stderr.write(d));
+  launcherProcess.on('exit', (code) => {
+    if (!isQuitting && code && mainWindow && !mainWindow.isDestroyed()) {
+      dialog.showErrorBox(
+        'AI Video 本地服务已停止',
+        `本地服务意外退出（错误码 ${code}）。\n\n日志目录：\n${logDir()}\n\n可双击 tools\\Export-Diagnostics.cmd 一键导出诊断包。`
+      );
+    }
+  });
+}
+
+async function boot() {
+  createWindow();
+  startLauncher();
+
+  const ok = await waitForUi();
+  if (!ok) {
+    dialog.showErrorBox(
+      'AI Video 启动超时',
+      `工作台未能在预期时间内启动。\n\n日志目录：\n${logDir()}\n\n可双击 tools\\Export-Diagnostics.cmd 一键导出诊断包。`
+    );
+    return;
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await mainWindow.loadURL(UI_URL);
+  }
+}
+
+app.whenReady().then(boot);
+
+app.on('second-instance', () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
+app.on('window-all-closed', () => {
+  app.quit();
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+  if (launcherProcess && !launcherProcess.killed) {
+    launcherProcess.kill('SIGTERM');
+  }
+});
