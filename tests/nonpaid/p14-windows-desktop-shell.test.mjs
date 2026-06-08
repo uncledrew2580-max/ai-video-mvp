@@ -1,12 +1,17 @@
 // P14-B5 nonpaid tests — desktop shell + updated client-shape checks.
 // Runs offline with mock temp dirs; zero model calls, zero network.
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { checkDesktopShell } from '../../scripts/win/check-desktop-shell.mjs';
 import { checkClientShape } from '../../scripts/win/check-client-shape.mjs';
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const WIN_MAIN = path.join(REPO_ROOT, 'desktop', 'win-main.cjs');
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -50,7 +55,7 @@ function validStagingRoot(root) {
   writeFile(path.join(root, 'tools', 'Open-Logs.cmd'));
   fs.mkdirSync(path.join(root, 'resources', 'runtime', 'node_modules'), { recursive: true });
   writeFile(path.join(root, 'resources', 'runtime', 'client', 'launcher.mjs'));
-  fs.mkdirSync(path.join(root, 'resources', 'app'), { recursive: true });
+  writeFile(path.join(root, 'resources', 'app', 'win-main.cjs'), '// win-main\n');
 }
 
 // ── checkDesktopShell ─────────────────────────────────────────────────────────
@@ -187,4 +192,57 @@ test('checkClientShape: missing 创建桌面快捷方式.cmd fails', () => {
     assert.equal(ok, false);
     assert.ok(errors.some((e) => /创建桌面快捷方式/.test(e)));
   } finally { cleanup(root); }
+});
+
+// ── Source-level checks (win-main.cjs + icon) ─────────────────────────────────
+
+test('win-main.cjs is syntactically valid JavaScript (node --check)', () => {
+  assert.ok(fs.existsSync(WIN_MAIN), `desktop/win-main.cjs must exist at ${WIN_MAIN}`);
+  assert.doesNotThrow(() => {
+    execFileSync(process.execPath, ['--check', WIN_MAIN], { timeout: 10000, stdio: 'pipe' });
+  }, 'desktop/win-main.cjs must pass node --check');
+});
+
+test('win-main.cjs uses bundled node.exe (not system PATH discovery)', () => {
+  const src = fs.readFileSync(WIN_MAIN, 'utf8');
+  assert.ok(
+    src.includes('node.exe'),
+    'win-main.cjs must reference bundled node.exe'
+  );
+  assert.ok(
+    !src.includes('commonNodePath') && !src.includes('which node') && !src.includes('where node'),
+    'win-main.cjs must not search system PATH for node — Windows portable uses bundled node.exe only'
+  );
+});
+
+test('win-main.cjs does not open external browser for the main UI URL', () => {
+  const src = fs.readFileSync(WIN_MAIN, 'utf8');
+  // openExternal is allowed for genuinely external URLs. Verify the UI_URL
+  // (127.0.0.1:18788) is never passed to openExternal.
+  assert.ok(
+    !src.includes("openExternal(UI_URL") &&
+    !src.includes("openExternal('http://127.0.0.1:18788") &&
+    !src.includes('openExternal("http://127.0.0.1:18788'),
+    'win-main.cjs must not open the main UI URL in an external browser'
+  );
+});
+
+test('build/icon.ico exists and is non-empty', () => {
+  const ico = path.join(REPO_ROOT, 'build', 'icon.ico');
+  assert.ok(fs.existsSync(ico), `build/icon.ico must be committed to the repo`);
+  assert.ok(fs.statSync(ico).size > 0, 'build/icon.ico must not be empty');
+});
+
+test('assemble script USAGE_TXT references AI Video.exe as primary entry', () => {
+  const assemble = fs.readFileSync(
+    path.join(REPO_ROOT, 'scripts', 'win', 'assemble-windows-portable.mjs'), 'utf8'
+  );
+  assert.ok(
+    assemble.includes('AI Video.exe'),
+    'assemble-windows-portable.mjs USAGE_TXT must mention AI Video.exe'
+  );
+  assert.ok(
+    !assemble.includes('双击根目录的 "AI Video.cmd"'),
+    'assemble USAGE_TXT must not instruct users to launch AI Video.cmd'
+  );
 });
