@@ -1,8 +1,8 @@
 name: Windows Real Smoke — Image Only (P14-B6)
 
 # P14-B6: Manual-only real-device smoke test against the Windows portable artifact.
-# Scope is limited to image generation; video, Veo, and storyboard-review operations
-# are blocked in real-smoke-image-only.mjs. Never auto-triggered.
+# Scope is limited to image generation; video and Veo operations are blocked by
+# smoke-guard.mjs and enforced by smoke-image-only.mjs. Never auto-triggered.
 
 # IMPORTANT: on: contains ONLY workflow_dispatch — no push, pull_request, or schedule.
 
@@ -13,6 +13,10 @@ on:
         description: 'Run ID of the windows-portable.yml build that produced AI-Video-Win-x64-Portable-RC-0001'
         required: false
         default: '27163429484'
+      image_model:
+        description: 'Image model override (default: nano-banana-pro)'
+        required: false
+        default: 'nano-banana-pro'
 
 permissions:
   contents: read
@@ -66,9 +70,33 @@ jobs:
             Write-Host 'Optional AI_VIDEO_BASE_URL not set — script will use provider default.'
           }
 
-      - name: Syntax check smoke script (node --check)
+      - name: Syntax check smoke scripts (node --check)
         shell: pwsh
-        run: node --check scripts/win/real-smoke-image-only.mjs
+        run: |
+          node --check scripts/win/smoke-guard.mjs
+          node --check scripts/win/smoke-image-only.mjs
+          node --check scripts/win/check-smoke-security.mjs
+
+      # Security gate: validates REAL_SMOKE_SCOPE, DISABLE_VIDEO_GENERATION, and
+      # AI_VIDEO_API_KEY presence before any model call can be attempted.
+      - name: Security gate (check-smoke-security.mjs)
+        shell: pwsh
+        env:
+          REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
+          DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
+          AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
+        run: node scripts/win/check-smoke-security.mjs
+
+      # Guard self-test: confirms all forbidden-operation guards throw before
+      # any network activity happens.
+      - name: Guard self-test (forbidden-operation guards must throw)
+        shell: pwsh
+        env:
+          REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
+          DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
+        run: >-
+          node -e
+          "import('./scripts/win/smoke-guard.mjs').then(m => m.selfTest()).catch(e => { console.error(e.message); process.exit(1); })"
 
       - name: Download portable artifact from B5 run
         uses: actions/download-artifact@v4
@@ -78,14 +106,17 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: dist-win/AI-Video-Win-x64-Portable-RC-0001
 
-      - name: Run real-smoke image-only safety guard (dry-run)
+      # Real smoke: scope guard and selfTest run at startup, then ONE image task
+      # is submitted and polled until result. Stops after image — no Veo/video/merge.
+      - name: Run image-only smoke
         shell: pwsh
         env:
           REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
           DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
           AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
           AI_VIDEO_BASE_URL: ${{ secrets.AI_VIDEO_BASE_URL }}
-        run: node scripts/win/real-smoke-image-only.mjs --dry-run
+          AI_VIDEO_IMAGE_MODEL: ${{ inputs.image_model }}
+        run: node scripts/win/smoke-image-only.mjs
 
       - name: Upload smoke report
         if: always()
@@ -94,5 +125,5 @@ jobs:
           name: smoke-report-image-only
           path: |
             smoke-report.json
-            diagnostics/
+            smoke-diagnostics/
           if-no-files-found: warn

@@ -346,7 +346,7 @@ test('checkSmokeSecurityGate collects all errors when nothing is set', async () 
 // ── Batch syntax check (mirrors nonpaid style in p14-n8n-runtime.test.mjs) ───
 
 test('new smoke scripts are syntactically valid (batch node --check)', () => {
-  for (const s of ['smoke-guard.mjs', 'smoke-image-only.mjs', 'check-smoke-security.mjs', 'real-smoke-image-only.mjs']) {
+  for (const s of ['smoke-guard.mjs', 'smoke-image-only.mjs', 'check-smoke-security.mjs']) {
     assert.doesNotThrow(() => {
       execFileSync(
         process.execPath,
@@ -355,4 +355,10 @@ test('new smoke scripts are syntactically valid (batch node --check)', () => {
       );
     }, `scripts/win/${s} must pass node --check`);
   }
+});
+
+test('workflow runs smoke-image-only.mjs as the actual smoke runner (not permanent --dry-run)', () => {
+  const yml = fs.readFileSync(WORKFLOW, 'utf8');
+  assert.ok(yml.includes('smoke-image-only.mjs'), 'workflow must reference smoke-image-only.mjs as runner');
+  assert.ok(!yml.includes('--dry-run'), 'workflow must not permanently pass --dry-run to the smoke script');
 });
