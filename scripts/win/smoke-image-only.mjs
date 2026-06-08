@@ -205,6 +205,11 @@ async function main() {
     image_ok: null,
     task_id: null,
     image_url: null,
+    video_generation_skipped: true,
+    veo_not_called: true,
+    final_merge_not_called: true,
+    stopped_at: 'image_generation',
+    stages: [],
     errors: [],
   };
 
@@ -215,8 +220,7 @@ async function main() {
     console.error('[smoke] FAIL: AI_VIDEO_API_KEY is required (set via GitHub Secret)');
     process.exit(1);
   }
-  // Log key length only — never log the value itself
-  console.log(`[smoke] AI_VIDEO_API_KEY present (length=${apiKey.length})`);
+  console.log('[smoke] AI_VIDEO_API_KEY present (value hidden)');
 
   const baseUrl = (process.env.AI_VIDEO_BASE_URL || 'https://api.kie.ai/api').replace(/\/+$/, '');
   const imageModel = (process.env.AI_VIDEO_IMAGE_MODEL || 'nano-banana-pro').trim();
@@ -232,9 +236,11 @@ async function main() {
       const userFolder = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-b6-n8n-'));
       n8nHandle = await startN8n(port, brokerPort, userFolder);
       report.n8n_ok = n8nHandle !== null;
+      report.stages.push(report.n8n_ok ? 'n8n' : 'n8n_failed');
     } else {
       console.log('[smoke] Portable tree absent — skipping n8n (no artifact downloaded)');
       report.n8n_ok = null;
+      report.stages.push('n8n_skipped');
     }
 
     // API key reachability: GET /v1/jobs/recordInfo with a dummy taskId.
@@ -259,6 +265,8 @@ async function main() {
       report.errors.push(`API key check network error: ${e.message}`);
       console.error(`[smoke] API key check error: ${e.message}`);
     }
+
+    report.stages.push('api_key_check');
 
     if (!report.api_key_ok) {
       report.image_ok = false;
@@ -352,8 +360,10 @@ async function main() {
         report.errors.push(`Image task timed out (taskId=${taskId})`);
         console.error('[smoke] Image task TIMED OUT after 60 poll attempts');
       }
+      report.stages.push('image_generation');
     }
   } finally {
+    report.stages.push('video_skipped');
     await stopN8n(n8nHandle);
     fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
     console.log(`[smoke] Report → ${REPORT_PATH}`);

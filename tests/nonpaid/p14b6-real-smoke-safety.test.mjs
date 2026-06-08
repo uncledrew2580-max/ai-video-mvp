@@ -246,6 +246,28 @@ test('smoke-image-only.mjs does not print the raw API key value', () => {
   );
 });
 
+test('smoke-image-only.mjs does not log API key length or any derived secret info', () => {
+  const src = fs.readFileSync(SMOKE_SCRIPT, 'utf8');
+  assert.ok(
+    !src.includes('apiKey.length'),
+    'smoke-image-only.mjs must not log apiKey.length — even length is derived secret info'
+  );
+});
+
+test('smoke-image-only.mjs report includes B6 stop-proof fields', () => {
+  const src = fs.readFileSync(SMOKE_SCRIPT, 'utf8');
+  assert.ok(src.includes('video_generation_skipped'), 'report must include video_generation_skipped field');
+  assert.ok(src.includes('veo_not_called'), 'report must include veo_not_called field');
+  assert.ok(src.includes('final_merge_not_called'), 'report must include final_merge_not_called field');
+  assert.ok(src.includes("stopped_at"), 'report must include stopped_at field');
+  assert.ok(src.includes("'image_generation'"), "stopped_at must be set to 'image_generation'");
+});
+
+test('smoke-image-only.mjs stages array includes video_skipped entry', () => {
+  const src = fs.readFileSync(SMOKE_SCRIPT, 'utf8');
+  assert.ok(src.includes("'video_skipped'"), "stages must include 'video_skipped' to prove video was not reached");
+});
+
 test('smoke-image-only.mjs does not reference Veo video endpoint', () => {
   const src = fs.readFileSync(SMOKE_SCRIPT, 'utf8');
   assert.ok(!src.includes('/v1/veo'), 'must not reference /v1/veo');
