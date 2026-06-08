@@ -42,7 +42,12 @@ function main() {
   if (!fs.existsSync(electronExe)) {
     throw new Error(`electron.exe not found at ${electronExe} — npm ci must run on the Windows runner first`);
   }
-  log(`electron dist: ${electronDist}`);
+
+  // Read installed electron version — required in config so electron-builder
+  // doesn't try to resolve it from the isolated build dir's node_modules.
+  const electronPkg = path.join(ROOT, 'node_modules', 'electron', 'package.json');
+  const electronVersion = JSON.parse(fs.readFileSync(electronPkg, 'utf8')).version;
+  log(`electron dist: ${electronDist} (v${electronVersion})`);
 
   // Verify icon.ico exists.
   const icoSrc = path.join(ROOT, 'build', 'icon.ico');
@@ -83,6 +88,8 @@ function main() {
     productName: 'AI Video',
     asar: false,
     npmRebuild: false,
+    // Pin exact version so electron-builder doesn't scan node_modules for it.
+    electronVersion,
     electronDist: '../node_modules/electron/dist',
     directories: { output: '../dist-win-electron' },
     files: ['win-main.cjs'],
