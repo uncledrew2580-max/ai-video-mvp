@@ -56,7 +56,9 @@ const FORBIDDEN_ROOT = [
 ];
 // The only top-level .json files allowed at the root. Anything else (workflow
 // exports, package manifests, lockfiles) leaking to the root is a shape failure.
-const ALLOWED_ROOT_JSON = new Set(['version.json', 'runtime-manifest.json']);
+// vk_swiftshader_icd.json is Electron's Vulkan ICD manifest — part of the
+// win-unpacked layout, not a leaked project file.
+const ALLOWED_ROOT_JSON = new Set(['version.json', 'runtime-manifest.json', 'vk_swiftshader_icd.json']);
 
 function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
 function isFile(p) { try { return fs.statSync(p).isFile(); } catch { return false; } }

@@ -50,6 +50,8 @@ function buildValid() {
   // resources/app is the Electron app code.
   touch(root, 'resources/app/win-main.cjs', '// win-main\n');
   mkdir(root, 'resources/licenses');
+  // Electron runtime file placed in win-unpacked root by electron-builder.
+  touch(root, 'vk_swiftshader_icd.json', '{"file_format_version":"1.0.0"}\n');
   return root;
 }
 
@@ -148,4 +150,12 @@ test('missing staging root fails cleanly', () => {
   const res = checkClientShape(path.join(ROOT, 'no-such-staging-root-xyz'));
   assert.equal(res.ok, false);
   assert.ok(res.errors.length >= 1);
+});
+
+test('vk_swiftshader_icd.json at root is allowed (Electron Vulkan ICD manifest)', () => {
+  const root = buildValid();
+  // vk_swiftshader_icd.json already present via buildValid(); shape check must pass.
+  const res = checkClientShape(root);
+  assert.equal(res.ok, true, `expected ok with vk_swiftshader_icd.json, got: ${res.errors.join('; ')}`);
+  fs.rmSync(root, { recursive: true, force: true });
 });
