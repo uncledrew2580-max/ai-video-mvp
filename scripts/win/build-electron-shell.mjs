@@ -1,7 +1,12 @@
 #!/usr/bin/env node
-// P14-B5: Build the Windows Electron desktop shell (win32-x64, unpacked dir).
+// P14-B5R1: Build the Windows Electron desktop shell (win32-x64, unpacked dir).
 // Runs on the Windows CI runner AFTER npm ci (which downloads the win32-x64
 // Electron binary into node_modules/electron/dist/).
+//
+// OOM fix (P14-B5R1): electron-builder is run from a MINIMAL ISOLATED build dir
+// (dist-win-electron-build/) that contains only win-main.cjs + package.json +
+// icon, NOT from the repo root. This prevents electron-builder from scanning the
+// multi-GB node_modules / resources/runtime tree and running out of memory.
 //
 // Output: dist-win-electron/win-unpacked/
 //   AI Video.exe         ← Electron binary with embedded app icon
@@ -23,7 +28,10 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const log = (m) => process.stdout.write(`[electron-shell] ${m}\n`);
 
-// electron-builder writes to dist-win-electron/win-unpacked/ (dir target, windows).
+// Isolated minimal build dir — contains only the Electron app source.
+// electron-builder runs from here so it never touches ROOT/node_modules.
+const BUILD_DIR = path.join(ROOT, 'dist-win-electron-build');
+// electron-builder writes unpacked output here.
 const OUTPUT_DIR = path.join(ROOT, 'dist-win-electron');
 const UNPACKED = path.join(OUTPUT_DIR, 'win-unpacked');
 
@@ -36,28 +44,77 @@ function main() {
   }
   log(`electron dist: ${electronDist}`);
 
-  // Verify icon.ico exists (generated from build/icon.iconset/icon_256x256.png).
-  const icoPath = path.join(ROOT, 'build', 'icon.ico');
-  if (!fs.existsSync(icoPath)) {
+  // Verify icon.ico exists.
+  const icoSrc = path.join(ROOT, 'build', 'icon.ico');
+  if (!fs.existsSync(icoSrc)) {
     throw new Error(`build/icon.ico not found — must be committed to repo`);
   }
-  log(`icon: ${icoPath}`);
+  log(`icon: ${icoSrc}`);
 
-  // Run electron-builder --win dir using the Windows-specific config.
-  const configPath = path.join(ROOT, 'electron-builder-win.json');
-  log('running electron-builder --win dir …');
+  // ── Build isolated minimal project dir ──────────────────────────────────────
+  // electron-builder runs from this small dir, never scanning ROOT/node_modules.
+  fs.rmSync(BUILD_DIR, { recursive: true, force: true });
+  fs.mkdirSync(path.join(BUILD_DIR, 'build'), { recursive: true });
+
+  // App source: only win-main.cjs.
+  fs.copyFileSync(path.join(ROOT, 'desktop', 'win-main.cjs'), path.join(BUILD_DIR, 'win-main.cjs'));
+  log('copied desktop/win-main.cjs → build dir');
+
+  // Icon (build/icon relative to BUILD_DIR; electron-builder appends .ico on Windows).
+  fs.copyFileSync(icoSrc, path.join(BUILD_DIR, 'build', 'icon.ico'));
+  log('copied build/icon.ico → build dir');
+
+  // Minimal package.json — no dependencies so electron-builder has nothing to scan.
+  const pkg = {
+    name: 'ai-video',
+    version: '0.0.0-rc',
+    main: 'win-main.cjs',
+    description: 'AI Video desktop shell',
+  };
+  fs.writeFileSync(path.join(BUILD_DIR, 'package.json'), JSON.stringify(pkg, null, 2) + '\n');
+  log('wrote minimal package.json');
+
+  // Inline electron-builder config — all paths relative to BUILD_DIR.
+  // electronDist: ../node_modules/electron/dist  → ROOT/node_modules/electron/dist
+  // directories.output: ../dist-win-electron     → ROOT/dist-win-electron
+  // files: only win-main.cjs (BUILD_DIR/win-main.cjs); no wildcard, no node_modules.
+  const ebConfig = {
+    appId: 'com.aivideo.workbench',
+    productName: 'AI Video',
+    asar: false,
+    npmRebuild: false,
+    electronDist: '../node_modules/electron/dist',
+    directories: { output: '../dist-win-electron' },
+    files: ['win-main.cjs'],
+    win: {
+      target: [{ target: 'dir', arch: ['x64'] }],
+      icon: 'build/icon',
+    },
+  };
+  const configPath = path.join(BUILD_DIR, 'electron-builder.json');
+  fs.writeFileSync(configPath, JSON.stringify(ebConfig, null, 2) + '\n');
+  log('wrote electron-builder.json (isolated config)');
+
+  // ── Run electron-builder from the isolated dir ──────────────────────────────
+  // Using the explicit bin path avoids npx discovery latency and ensures the
+  // correct version is used regardless of PATH.
+  const ebBin = process.platform === 'win32'
+    ? path.join(ROOT, 'node_modules', '.bin', 'electron-builder.cmd')
+    : path.join(ROOT, 'node_modules', '.bin', 'electron-builder');
+
+  log(`running electron-builder --win dir (cwd: dist-win-electron-build/) …`);
   execFileSync(
-    'npx',
-    ['electron-builder', '--win', 'dir', '--config', configPath],
+    ebBin,
+    ['--win', 'dir', '--config', configPath],
     {
-      cwd: ROOT,
+      cwd: BUILD_DIR,
       stdio: 'inherit',
       timeout: 300000,
-      shell: true,
+      shell: process.platform === 'win32',
     }
   );
 
-  // Verify output.
+  // ── Verify output ────────────────────────────────────────────────────────────
   if (!fs.existsSync(UNPACKED)) {
     throw new Error(`electron-builder output not found at ${UNPACKED}`);
   }
@@ -76,6 +133,10 @@ function main() {
   log(`AI Video.exe  ${(exeSize / 1048576).toFixed(1)} MB`);
   log(`resources/app/win-main.cjs  OK`);
   log(`Electron shell built → ${UNPACKED}`);
+
+  // Clean up isolated build dir (output already extracted to dist-win-electron/).
+  fs.rmSync(BUILD_DIR, { recursive: true, force: true });
+  log('cleaned up dist-win-electron-build/');
 }
 
 main();

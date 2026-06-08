@@ -17,6 +17,8 @@ node_modules/
 **/node_modules/
 dist/
 dist-win/
+dist-win-electron/
+dist-win-electron-build/
 build/*
 !build/icon.ico
 release-candidates/
