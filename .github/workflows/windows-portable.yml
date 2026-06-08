@@ -12,6 +12,8 @@ on:
       - '.github/workflows/windows-portable.yml'
       - 'scripts/win/**'
       - 'tests/nonpaid/p14-windows-final-merge.test.mjs'
+      - 'tests/nonpaid/p14-windows-config-init.test.mjs'
+      - 'tests/nonpaid/p14-windows-output-dirs.test.mjs'
 
 permissions:
   contents: read
@@ -94,6 +96,12 @@ jobs:
         env:
           AI_VIDEO_FFMPEG_PATH: ${{ github.workspace }}\runtime\bin\ffmpeg.exe
         run: node --test tests/nonpaid/p14-windows-final-merge.test.mjs
+
+      - name: Windows nonpaid tests (config init + output dirs)
+        shell: pwsh
+        run: |
+          node --test tests/nonpaid/p14-windows-config-init.test.mjs
+          node --test tests/nonpaid/p14-windows-output-dirs.test.mjs
 
       - name: Assemble portable staging tree (filter non-win32 native modules)
         shell: pwsh
