@@ -1,8 +1,8 @@
 name: Windows Real Smoke — Image Only (P14-B6)
 
 # P14-B6: Manual-only real-device smoke test against the Windows portable artifact.
-# Scope is limited to image generation; all video/Veo/final/review-submit/rerun-shot
-# paths are blocked in real-smoke-image-only.mjs. Never auto-triggered.
+# Scope is limited to image generation; video, Veo, and storyboard-review operations
+# are blocked in real-smoke-image-only.mjs. Never auto-triggered.
 
 # IMPORTANT: on: contains ONLY workflow_dispatch — no push, pull_request, or schedule.
 

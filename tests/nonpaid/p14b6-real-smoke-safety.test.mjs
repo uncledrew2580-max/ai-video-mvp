@@ -261,10 +261,92 @@ test('smoke-image-only.mjs does not reference final-merge or review-submit route
   assert.ok(!src.includes("'/review-rerun-shot'") && !src.includes('"/review-rerun-shot"'), 'must not have literal /review-rerun-shot string');
 });
 
+// ── checkSmokeSecurityGate (check-smoke-security.mjs) ────────────────────────
+
+const CHECK_SECURITY = path.join(ROOT, 'scripts', 'win', 'check-smoke-security.mjs');
+
+test('check-smoke-security.mjs passes node --check', () => {
+  assert.ok(fs.existsSync(CHECK_SECURITY), `missing ${CHECK_SECURITY}`);
+  assert.doesNotThrow(() => {
+    execFileSync(process.execPath, ['--check', CHECK_SECURITY], { stdio: 'pipe' });
+  });
+});
+
+test('checkSmokeSecurityGate passes when all three conditions are met', async () => {
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { ok, errors } = checkSmokeSecurityGate({
+    REAL_SMOKE_SCOPE: 'image_only',
+    DISABLE_VIDEO_GENERATION: 'true',
+    AI_VIDEO_API_KEY: 'dummy-test-key-for-nonpaid-test',
+  });
+  assert.equal(ok, true, `expected ok=true, got errors: ${errors.join('; ')}`);
+  assert.equal(errors.length, 0);
+});
+
+test('checkSmokeSecurityGate fails when REAL_SMOKE_SCOPE is wrong', async () => {
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { ok, errors } = checkSmokeSecurityGate({
+    REAL_SMOKE_SCOPE: 'full',
+    DISABLE_VIDEO_GENERATION: 'true',
+    AI_VIDEO_API_KEY: 'dummy-test-key',
+  });
+  assert.equal(ok, false);
+  assert.ok(errors.some((e) => e.includes('REAL_SMOKE_SCOPE')), `expected REAL_SMOKE_SCOPE error, got: ${errors}`);
+});
+
+test('checkSmokeSecurityGate fails when REAL_SMOKE_SCOPE is absent', async () => {
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { ok, errors } = checkSmokeSecurityGate({
+    DISABLE_VIDEO_GENERATION: 'true',
+    AI_VIDEO_API_KEY: 'dummy-test-key',
+  });
+  assert.equal(ok, false);
+  assert.ok(errors.some((e) => e.includes('REAL_SMOKE_SCOPE')));
+});
+
+test('checkSmokeSecurityGate fails when DISABLE_VIDEO_GENERATION is not true', async () => {
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { ok, errors } = checkSmokeSecurityGate({
+    REAL_SMOKE_SCOPE: 'image_only',
+    DISABLE_VIDEO_GENERATION: 'false',
+    AI_VIDEO_API_KEY: 'dummy-test-key',
+  });
+  assert.equal(ok, false);
+  assert.ok(errors.some((e) => e.includes('DISABLE_VIDEO_GENERATION')));
+});
+
+test('checkSmokeSecurityGate fails when AI_VIDEO_API_KEY is absent', async () => {
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { ok, errors } = checkSmokeSecurityGate({
+    REAL_SMOKE_SCOPE: 'image_only',
+    DISABLE_VIDEO_GENERATION: 'true',
+  });
+  assert.equal(ok, false);
+  assert.ok(errors.some((e) => e.includes('AI_VIDEO_API_KEY')));
+});
+
+test('checkSmokeSecurityGate fails when AI_VIDEO_API_KEY is empty string', async () => {
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { ok, errors } = checkSmokeSecurityGate({
+    REAL_SMOKE_SCOPE: 'image_only',
+    DISABLE_VIDEO_GENERATION: 'true',
+    AI_VIDEO_API_KEY: '',
+  });
+  assert.equal(ok, false);
+  assert.ok(errors.some((e) => e.includes('AI_VIDEO_API_KEY')));
+});
+
+test('checkSmokeSecurityGate collects all errors when nothing is set', async () => {
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { ok, errors } = checkSmokeSecurityGate({});
+  assert.equal(ok, false);
+  assert.ok(errors.length >= 3, `expected at least 3 errors, got ${errors.length}: ${errors}`);
+});
+
 // ── Batch syntax check (mirrors nonpaid style in p14-n8n-runtime.test.mjs) ───
 
 test('new smoke scripts are syntactically valid (batch node --check)', () => {
-  for (const s of ['smoke-guard.mjs', 'smoke-image-only.mjs']) {
+  for (const s of ['smoke-guard.mjs', 'smoke-image-only.mjs', 'check-smoke-security.mjs', 'real-smoke-image-only.mjs']) {
     assert.doesNotThrow(() => {
       execFileSync(
         process.execPath,
