@@ -1,0 +1,176 @@
+name: Windows UI Smoke — Image Only (P14-B8)
+
+# P14-B8: Manual-only UI-DRIVEN real-device smoke against the Windows portable
+# artifact. A real user flow is simulated through the AI Video.exe Electron window
+# (Playwright): launch the app, type the API Key in the UI, save, verify configured,
+# confirm output dir, verify WF presence, then run the full image-only pipeline —
+# submit the creative-brief form → select a creative direction → wait for the script
+# → confirm the script → generate the storyboard/Nano image → verify it on the review
+# page, then STOP before video. Video, Veo and final video merge are blocked by
+# smoke-guard scope + a renderer network interceptor.
+#
+# IMPORTANT: on: contains ONLY workflow_dispatch — no push, pull_request, or schedule.
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: 'Run ID of the windows-portable.yml build that produced AI-Video-Win-x64-Portable-RC-0001'
+        required: false
+        default: '27184958813'
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  REAL_SMOKE_SCOPE: image_only
+  DISABLE_VIDEO_GENERATION: 'true'
+
+jobs:
+  ui-smoke-image-only:
+    runs-on: windows-2022
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Mask secrets immediately — before any step that could echo env vars.
+      - name: Mask secrets
+        shell: pwsh
+        run: |
+          $apiKey = '${{ secrets.AI_VIDEO_API_KEY }}'
+          if ($apiKey -ne '') { Write-Output "::add-mask::$apiKey" }
+          $baseUrl = '${{ secrets.AI_VIDEO_BASE_URL }}'
+          if ($baseUrl -ne '') { Write-Output "::add-mask::$baseUrl" }
+
+      # Fail fast if the required secret is absent — never print the value.
+      - name: Check required secrets
+        shell: pwsh
+        run: |
+          if ('${{ secrets.AI_VIDEO_API_KEY }}' -eq '') {
+            Write-Error 'Required secret AI_VIDEO_API_KEY is not set. Add it in Settings > Secrets > Actions.'
+            exit 1
+          }
+          Write-Host 'Secret presence check: AI_VIDEO_API_KEY is set (value hidden).'
+
+      - name: Syntax check smoke scripts (node --check)
+        shell: pwsh
+        run: |
+          node --check scripts/win/smoke-guard.mjs
+          node --check scripts/win/check-smoke-security.mjs
+          node --check scripts/win/ui-smoke-image-only.mjs
+
+      # Security gate: REAL_SMOKE_SCOPE, DISABLE_VIDEO_GENERATION, key presence.
+      - name: Security gate (check-smoke-security.mjs)
+        shell: pwsh
+        env:
+          REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
+          DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
+          AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
+        run: node scripts/win/check-smoke-security.mjs
+
+      # Guard self-test: all forbidden-operation guards must throw before any UI work.
+      - name: Guard self-test (forbidden-operation guards must throw)
+        shell: pwsh
+        env:
+          REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
+          DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
+        run: >-
+          node -e
+          "import('./scripts/win/smoke-guard.mjs').then(m => m.selfTest()).catch(e => { console.error(e.message); process.exit(1); })"
+
+      # Offline nonpaid safety + shape tests (no artifact needed, no model calls).
+      - name: Nonpaid safety + config/presence tests
+        shell: pwsh
+        run: |
+          node --test tests/nonpaid/p14b8-ui-smoke-safety.test.mjs
+          node --test tests/nonpaid/p14b6-real-smoke-safety.test.mjs
+          node --test tests/nonpaid/p14b7-windows-config-sqlite.test.mjs
+          node --test tests/nonpaid/p14-windows-config-init.test.mjs
+          node --test tests/nonpaid/p14-windows-output-dirs.test.mjs
+
+      # Download the portable artifact (gh CLI + retry; resolve the stage root).
+      - name: Download portable artifact (gh CLI + retry)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $artifactName = 'AI-Video-Win-x64-Portable-RC-0001'
+          $runId        = '${{ inputs.artifact_run_id }}'
+          $targetDir    = Join-Path 'dist-win' $artifactName
+          $maxAttempts  = 5
+          $succeeded    = $false
+          for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+            Write-Host "[$attempt/$maxAttempts] Downloading '$artifactName' from run $runId -> $targetDir ..."
+            if (Test-Path $targetDir) { Remove-Item $targetDir -Recurse -Force }
+            gh run download $runId --name $artifactName --dir $targetDir
+            if ($LASTEXITCODE -eq 0) { $succeeded = $true; break }
+            if ($attempt -lt $maxAttempts) {
+              $backoff = [math]::Min(60 * $attempt, 300)
+              Write-Warning "Attempt $attempt failed (exit $LASTEXITCODE). Retrying in ${backoff}s ..."
+              Start-Sleep -Seconds $backoff
+            }
+          }
+          if (-not $succeeded) { Write-Error "Artifact download failed after $maxAttempts attempts."; exit 1 }
+          $exeFiles = Get-ChildItem -Path $targetDir -Filter 'AI Video.exe' -Recurse -File
+          if ($exeFiles.Count -ne 1) {
+            Write-Error "Expected exactly one 'AI Video.exe' under '$targetDir', found $($exeFiles.Count)."
+            exit 1
+          }
+          $stageDir = $exeFiles[0].DirectoryName
+          Write-Host "Stage dir resolved: $stageDir  (AI Video.exe present)"
+          "AI_VIDEO_STAGE_DIR=$stageDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # Preserved required checks against the downloaded artifact (no model calls).
+      - name: Verify client shape (small-user layout)
+        shell: pwsh
+        run: node scripts/win/check-client-shape.mjs "$env:AI_VIDEO_STAGE_DIR"
+
+      - name: Verify desktop shell (AI Video.exe + Electron app code)
+        shell: pwsh
+        run: node scripts/win/check-desktop-shell.mjs "$env:AI_VIDEO_STAGE_DIR"
+
+      - name: Verify native modules win32-x64 (artifact tree)
+        shell: pwsh
+        run: node scripts/win/verify-native-modules.mjs "$env:AI_VIDEO_STAGE_DIR/resources/runtime/node_modules"
+
+      - name: Verify n8n runtime completeness (artifact tree)
+        shell: pwsh
+        run: node scripts/win/check-n8n-runtime-completeness.mjs "$env:AI_VIDEO_STAGE_DIR/resources/runtime/node_modules"
+
+      - name: n8n launch smoke (start from portable tree, no real workflow)
+        shell: pwsh
+        run: node scripts/win/n8n-launch-smoke.mjs "$env:AI_VIDEO_STAGE_DIR/resources/runtime"
+
+      # Playwright (Electron automation only — no browser download needed).
+      # --no-save keeps package.json / lockfile unchanged.
+      - name: Install Playwright (no-save)
+        shell: pwsh
+        run: npm install --no-save playwright@^1.49.0
+
+      # The real UI-driven smoke: drives AI Video.exe through Playwright.
+      - name: Run UI-driven image-only smoke
+        shell: pwsh
+        env:
+          REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
+          DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
+          AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
+          AI_VIDEO_BASE_URL: ${{ secrets.AI_VIDEO_BASE_URL }}
+        run: node scripts/win/ui-smoke-image-only.mjs "$env:AI_VIDEO_STAGE_DIR"
+
+      - name: Upload UI smoke report + screenshots + diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-smoke-report-image-only
+          path: |
+            smoke-report.json
+            smoke-diagnostics/
+          if-no-files-found: warn
