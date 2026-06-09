@@ -28,6 +28,7 @@ const REQUIRED_FILES = [
   'tools/Start-AI-Video-Debug.cmd',
   'tools/Export-Diagnostics.cmd',
   'tools/Open-Logs.cmd',
+  'tools/Stop-AI-Video.cmd',          // lifecycle: graceful stop via PID file
 ];
 const REQUIRED_DIRS = [
   'resources',

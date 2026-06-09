@@ -30,7 +30,7 @@ const ELECTRON_UNPACKED = path.join(ROOT, 'dist-win-electron', 'win-unpacked');
 const log = (m) => process.stdout.write(`[assemble] ${m}\n`);
 
 const INCLUDE = [
-  'app-server', 'client', 'config', 'desktop', 'prompts', 'scripts',
+  'app-server', 'client', 'config', 'desktop', 'lib', 'prompts', 'scripts',
   '版本测试', '正式导入文件', 'runtime',
   'node_modules',
   'package.json', 'package-lock.json',
@@ -229,7 +229,7 @@ set "AI_VIDEO_HOME=%APPDATA%\\AI Video"
 set "AI_VIDEO_FFMPEG_PATH=%RUNTIME_DIR%\\runtime\\bin\\ffmpeg.exe"
 set "AI_VIDEO_RUNTIME_ROOT=%AI_VIDEO_HOME%"
 set "WORKFLOW_DATA_ROOT=%AI_VIDEO_HOME%\\workflow-data"
-set "N8N_USER_FOLDER=%AI_VIDEO_HOME%\\n8n-user"
+set "N8N_USER_FOLDER=%AI_VIDEO_HOME%\\workflow-data"
 set "AI_VIDEO_LOG_DIR=%AI_VIDEO_HOME%\\logs\\launcher"
 set "AI_VIDEO_CONFIG_PATH=%AI_VIDEO_HOME%\\config\\local-config.json"
 set "AI_VIDEO_OUTPUT_DIR=%USERPROFILE%\\Documents\\AI Video Outputs"
@@ -299,6 +299,44 @@ if not exist "%LOGDIR%" (
   exit /b 0
 )
 explorer "%LOGDIR%"
+endlocal
+`;
+
+// tools/Stop-AI-Video.cmd — graceful stop of the running AI Video desktop app.
+// Reads %APPDATA%\AI Video\runtime\ai-video.pid (written by win-main.cjs) and
+// only stops a process whose image name is exactly "AI Video.exe" — never an
+// unknown PID. Falls back to image-name match if the PID file is stale.
+const STOP_CMD = `@echo off
+chcp 65001 >nul
+title AI Video — 停止
+setlocal EnableDelayedExpansion
+set "PIDFILE=%APPDATA%\\AI Video\\runtime\\ai-video.pid"
+set "TARGET="
+if exist "%PIDFILE%" set /p TARGET=<"%PIDFILE%"
+
+if defined TARGET (
+  REM Only kill the PID if it is actually an "AI Video.exe" process.
+  for /f "tokens=1" %%P in ('tasklist /FI "PID eq !TARGET!" /FI "IMAGENAME eq AI Video.exe" /NH 2^>nul ^| find /I "AI Video.exe"') do (
+    echo 正在停止 AI Video（PID !TARGET!）……
+    taskkill /PID !TARGET! /T /F >nul 2>nul
+    del "%PIDFILE%" >nul 2>nul
+    echo 已停止。
+    goto :done
+  )
+)
+
+REM PID file missing or stale — stop by image name (only AI Video.exe).
+tasklist /FI "IMAGENAME eq AI Video.exe" /NH 2>nul | find /I "AI Video.exe" >nul
+if %ERRORLEVEL%==0 (
+  echo 正在停止 AI Video……
+  taskkill /IM "AI Video.exe" /T /F >nul 2>nul
+  if exist "%PIDFILE%" del "%PIDFILE%" >nul 2>nul
+  echo 已停止。
+) else (
+  echo 未发现正在运行的 AI Video。
+)
+
+:done
 endlocal
 `;
 
@@ -466,7 +504,8 @@ function main() {
   fs.writeFileSync(path.join(STAGE, 'tools', 'Start-AI-Video-Debug.cmd'), crlf(DEBUG_CMD));
   fs.writeFileSync(path.join(STAGE, 'tools', 'Export-Diagnostics.cmd'), crlf(EXPORT_CMD));
   fs.writeFileSync(path.join(STAGE, 'tools', 'Open-Logs.cmd'), crlf(OPEN_LOGS_CMD));
-  log('wrote 创建桌面快捷方式.cmd, 使用说明.txt, tools/{AI Video (命令行模式),Start-AI-Video-Debug,Export-Diagnostics,Open-Logs}.cmd, resources/licenses');
+  fs.writeFileSync(path.join(STAGE, 'tools', 'Stop-AI-Video.cmd'), crlf(STOP_CMD));
+  log('wrote 创建桌面快捷方式.cmd, 使用说明.txt, tools/{AI Video (命令行模式),Start-AI-Video-Debug,Export-Diagnostics,Open-Logs,Stop-AI-Video}.cmd, resources/licenses');
 
   const nodeVer = execFileSync(nodeExe, ['--version'], { timeout: 20000 }).toString('utf8').trim();
   const ffVer = execFileSync(ffExe, ['-hide_banner', '-version'], { timeout: 20000 }).toString('utf8');

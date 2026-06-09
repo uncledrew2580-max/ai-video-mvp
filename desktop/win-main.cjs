@@ -22,6 +22,47 @@ let mainWindow;
 let launcherProcess;
 let isQuitting = false;
 
+// ── Per-user data layout (root cause #1) ────────────────────────────────────
+// AI Video.exe must inject the SAME env the cmd-mode launcher sets (assemble's
+// ENV_BLOCK). Without it, client/launcher.mjs fails dist detection and falls
+// back to source-dev paths, writing config into resources/runtime/版本测试/.
+function aiVideoHome() {
+  return path.join(app.getPath('appData'), 'AI Video');
+}
+function userDataLayout() {
+  const home = aiVideoHome();
+  return {
+    home,
+    configDir: path.join(home, 'config'),
+    configPath: path.join(home, 'config', 'local-config.json'),
+    logDir: path.join(home, 'logs', 'launcher'),
+    runtimeRoot: home,
+    pidDir: path.join(home, 'runtime'),
+    pidPath: path.join(home, 'runtime', 'ai-video.pid'),
+    // n8n user folder == workflow-data so the n8n DB and the workflow data root
+    // live under one user dir (%APPDATA%\AI Video\workflow-data), never n8n-user.
+    workflowDataRoot: path.join(home, 'workflow-data'),
+    n8nUserFolder: path.join(home, 'workflow-data'),
+  };
+}
+function ensureUserDataDirs(layout) {
+  for (const dir of [layout.home, layout.configDir, layout.logDir, layout.pidDir, layout.workflowDataRoot, layout.n8nUserFolder]) {
+    try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+  }
+}
+function writePidFile(layout) {
+  try { fs.writeFileSync(layout.pidPath, String(process.pid)); } catch {}
+}
+function removePidFile(layout) {
+  // Only remove the file when it still names this process — never touch a PID we
+  // do not own.
+  try {
+    if (fs.readFileSync(layout.pidPath, 'utf8').trim() === String(process.pid)) {
+      fs.unlinkSync(layout.pidPath);
+    }
+  } catch {}
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
@@ -161,6 +202,9 @@ function startLauncher() {
     return;
   }
 
+  const layout = userDataLayout();
+  ensureUserDataDirs(layout);
+
   const env = {
     ...process.env,
     AI_VIDEO_NO_BROWSER: '1',
@@ -170,7 +214,15 @@ function startLauncher() {
     N8N_HOST: `http://127.0.0.1:${N8N_PORT}`,
     PROJECT_ROOT,
     AI_VIDEO_FFMPEG_PATH: FFMPEG_EXE,
-    AI_VIDEO_HOME: path.join(app.getPath('appData'), 'AI Video'),
+    // Full per-user env — mirrors assemble ENV_BLOCK so the Electron entry and the
+    // cmd-mode entry resolve identical config/data/log paths under %APPDATA%.
+    AI_VIDEO_HOME: layout.home,
+    AI_VIDEO_CONFIG_DIR: layout.configDir,
+    AI_VIDEO_CONFIG_PATH: layout.configPath,
+    AI_VIDEO_LOG_DIR: layout.logDir,
+    AI_VIDEO_RUNTIME_ROOT: layout.runtimeRoot,
+    WORKFLOW_DATA_ROOT: layout.workflowDataRoot,
+    N8N_USER_FOLDER: layout.n8nUserFolder,
   };
 
   launcherProcess = spawn(NODE_EXE, [LAUNCHER, '--no-browser'], {
@@ -192,6 +244,7 @@ function startLauncher() {
 }
 
 async function boot() {
+  writePidFile(userDataLayout());
   createWindow();
   startLauncher();
 
@@ -227,4 +280,5 @@ app.on('before-quit', () => {
   if (launcherProcess && !launcherProcess.killed) {
     launcherProcess.kill('SIGTERM');
   }
+  removePidFile(userDataLayout());
 });

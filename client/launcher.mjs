@@ -19,12 +19,36 @@ const UI_DIR = join(PROJECT_ROOT, '版本测试');
 const UI_SCRIPT = join(UI_DIR, 'serve-review-assets.mjs');
 const WORKFLOW_BOOTSTRAP_SCRIPT = join(PROJECT_ROOT, 'scripts', 'bootstrap-ai-video-workflows.mjs');
 const _launcherPath = __dirname.replace(/\\/g, '/');
-const _IS_DIST = _launcherPath.includes('.app/Contents/') || _launcherPath.includes('/dist/');
-const APP_SUPPORT_DIR = join(homedir(), 'Library', 'Application Support', 'AI Video');
+// Dist detection. macOS: path lives inside an .app bundle or /dist/. Windows
+// packaged: launcher lives at resources/runtime/client/launcher.mjs (no .app),
+// so also treat the Electron/cmd shell signals as dist:
+//   - AI_VIDEO_APP_MODE=1 (set by both desktop shells)
+//   - the packaged resources/runtime/ layout
+// Without this, the Windows app falls back to source-dev paths and POSIX-only
+// port handling (lsof/SIGTERM), writing config into resources/runtime/版本测试/.
+const _IS_DIST =
+  _launcherPath.includes('.app/Contents/') ||
+  _launcherPath.includes('/dist/') ||
+  _launcherPath.includes('/resources/runtime/') ||
+  process.env.AI_VIDEO_APP_MODE === '1';
+// Per-user data base, platform-aware: Windows -> %APPDATA%\AI Video,
+// macOS -> ~/Library/Application Support/AI Video, others -> ~/.ai-video.
+const APP_SUPPORT_DIR = process.platform === 'win32'
+  ? join(process.env.APPDATA || join(homedir(), 'AppData', 'Roaming'), 'AI Video')
+  : process.platform === 'darwin'
+    ? join(homedir(), 'Library', 'Application Support', 'AI Video')
+    : join(homedir(), '.ai-video');
 const RUNTIME_ROOT = process.env.AI_VIDEO_RUNTIME_ROOT || (_IS_DIST ? APP_SUPPORT_DIR : PROJECT_ROOT);
 const DEFAULT_WORKFLOW_DATA_ROOT = _IS_DIST ? join(APP_SUPPORT_DIR, 'workflow-data') : PROJECT_ROOT;
 const WORKFLOW_DATA_ROOT = process.env.WORKFLOW_DATA_ROOT || DEFAULT_WORKFLOW_DATA_ROOT;
-const N8N_USER_FOLDER = process.env.N8N_USER_FOLDER || (_IS_DIST ? join(APP_SUPPORT_DIR, 'n8n-user') : join(PROJECT_ROOT, '.n8n-local-cache'));
+// Windows dist: n8n user folder defaults to workflow-data (matches the env both
+// the Electron exe and the cmd entry inject), so the n8n DB never splits to a
+// separate n8n-user dir. macOS/other dist keep n8n-user to avoid relocating an
+// existing on-disk n8n DB.
+const _DIST_N8N_USER_FOLDER = process.platform === 'win32'
+  ? join(APP_SUPPORT_DIR, 'workflow-data')
+  : join(APP_SUPPORT_DIR, 'n8n-user');
+const N8N_USER_FOLDER = process.env.N8N_USER_FOLDER || (_IS_DIST ? _DIST_N8N_USER_FOLDER : join(PROJECT_ROOT, '.n8n-local-cache'));
 const LOG_DIR = process.env.AI_VIDEO_LOG_DIR || (_IS_DIST ? join(APP_SUPPORT_DIR, 'logs', 'launcher') : join(PROJECT_ROOT, 'logs', 'launcher'));
 const CONFIG_PATH = process.env.AI_VIDEO_CONFIG_PATH || (_IS_DIST
   ? join(APP_SUPPORT_DIR, 'config', 'local-config.json')

@@ -44,6 +44,7 @@ function buildValid() {
   touch(root, 'tools/Start-AI-Video-Debug.cmd', '@echo off\r\n');
   touch(root, 'tools/Export-Diagnostics.cmd', '@echo off\r\n');
   touch(root, 'tools/Open-Logs.cmd', '@echo off\r\n');
+  touch(root, 'tools/Stop-AI-Video.cmd', '@echo off\r\n');
   // resources/runtime is the runnable project root (launcher PROJECT_ROOT).
   mkdir(root, 'resources/runtime/node_modules');
   touch(root, 'resources/runtime/client/launcher.mjs', '// launcher\n');

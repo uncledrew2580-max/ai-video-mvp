@@ -53,6 +53,7 @@ function validStagingRoot(root) {
   writeFile(path.join(root, 'tools', 'Start-AI-Video-Debug.cmd'));
   writeFile(path.join(root, 'tools', 'Export-Diagnostics.cmd'));
   writeFile(path.join(root, 'tools', 'Open-Logs.cmd'));
+  writeFile(path.join(root, 'tools', 'Stop-AI-Video.cmd'));
   fs.mkdirSync(path.join(root, 'resources', 'runtime', 'node_modules'), { recursive: true });
   writeFile(path.join(root, 'resources', 'runtime', 'client', 'launcher.mjs'));
   writeFile(path.join(root, 'resources', 'app', 'win-main.cjs'), '// win-main\n');

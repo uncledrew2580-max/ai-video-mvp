@@ -19,8 +19,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runSqlite } from './lib/sqlite-exec.mjs';
 
 const ROOT = process.env.TIKTOK_WORKFLOW_ROOT || process.env.PROJECT_ROOT || path.dirname(fileURLToPath(import.meta.url));
 const ITER_DIR = path.join(ROOT, '正式导入文件', 'iteration-v1');
@@ -80,7 +80,8 @@ function sqlString(value) {
 }
 
 function sqlite(query) {
-  return execFileSync('sqlite3', ['-cmd', '.timeout 8000', DB, query], { encoding: 'utf8' });
+  // node:sqlite first (Windows portable ships no sqlite3 CLI), CLI fallback.
+  return runSqlite(['-cmd', '.timeout 8000', DB, query], { encoding: 'utf8' });
 }
 
 // ── Validation ────────────────────────────────────────────────────────────────
@@ -339,11 +340,12 @@ sql += 'COMMIT;\n';
 
 // ── Execute ───────────────────────────────────────────────────────────────────
 
-const sqlPath = `/tmp/sync-iteration-v1-${Date.now()}.sql`;
+// os.tmpdir() (not hardcoded /tmp) so this works on Windows portable too.
+const sqlPath = path.join(os.tmpdir(), `sync-iteration-v1-${Date.now()}.sql`);
 fs.writeFileSync(sqlPath, sql);
 
 try {
-  execFileSync('sqlite3', [DB], { input: fs.readFileSync(sqlPath, 'utf8'), stdio: ['pipe', 'inherit', 'inherit'] });
+  runSqlite([DB], { input: fs.readFileSync(sqlPath, 'utf8'), stdio: ['pipe', 'inherit', 'inherit'] });
 } finally {
   fs.unlinkSync(sqlPath);
 }

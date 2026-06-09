@@ -13,6 +13,7 @@ import {
 } from '../app-server/services/stage-router.service.mjs';
 import { atomicWriteJson } from './lib/atomic-write.mjs';
 import { normalizeManualOutputBase, ensureOutputDirsWritable } from './lib/output-dirs.mjs';
+import { runSqlite } from '../lib/sqlite-exec.mjs';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 // Runtime project data lives in the project root (one level up when running from 版本测试/)
@@ -20,13 +21,27 @@ const PROJECT_ROOT = process.env.PROJECT_ROOT ||
   (path.basename(SCRIPT_DIR) === '版本测试' ? path.dirname(SCRIPT_DIR) : SCRIPT_DIR);
 // Keep __dirname alias for any remaining static-file references inside 版本测试/
 const __dirname = SCRIPT_DIR;
-const EARLY_APP_MODE = (() => {
-  const s = SCRIPT_DIR.replace(/\\/g, '/');
-  return (s.includes('.app/Contents/') || s.includes('/dist/')) ? 'dist' : 'source';
-})();
-const EARLY_APP_SUPPORT_DIR = process.platform === 'darwin'
-  ? path.join(os.homedir(), 'Library', 'Application Support', 'AI Video')
-  : path.join(os.homedir(), '.ai-video');
+// Dist detection: macOS .app/dist path, OR the Windows packaged
+// resources/runtime/ layout, OR the desktop-shell signal AI_VIDEO_APP_MODE=1.
+function detectAppMode(scriptDir) {
+  const s = scriptDir.replace(/\\/g, '/');
+  if (s.includes('.app/Contents/') || s.includes('/dist/') || s.includes('/resources/runtime/')) return 'dist';
+  if (process.env.AI_VIDEO_APP_MODE === '1') return 'dist';
+  return 'source';
+}
+// Per-user data base, platform-aware: Windows -> %APPDATA%\AI Video,
+// macOS -> ~/Library/Application Support/AI Video, others -> ~/.ai-video.
+function userSupportDir() {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'AI Video');
+  }
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'AI Video');
+  }
+  return path.join(os.homedir(), '.ai-video');
+}
+const EARLY_APP_MODE = detectAppMode(SCRIPT_DIR);
+const EARLY_APP_SUPPORT_DIR = userSupportDir();
 // WORKFLOW_DATA_ROOT: where n8n Code nodes write concept-context / project-state.
 // Separate from PROJECT_ROOT so the dist app can keep its own script root while
 // reading runtime data from a user-writable directory.
@@ -60,14 +75,9 @@ const PORT = Number(process.env.REVIEW_ASSET_PORT || 8788);
 const N8N_PORT = Number(process.env.N8N_PORT || 5678);
 const SERVER_STARTED_AT = new Date().toISOString();
 const SERVER_PID = process.pid;
-// app_mode: 'dist' when launched from inside an .app bundle, 'source' otherwise
-const APP_MODE = (() => {
-  const s = SCRIPT_DIR.replace(/\\/g, '/');
-  return (s.includes('.app/Contents/') || s.includes('/dist/')) ? 'dist' : 'source';
-})();
-const APP_SUPPORT_DIR = process.platform === 'darwin'
-  ? path.join(os.homedir(), 'Library', 'Application Support', 'AI Video')
-  : path.join(os.homedir(), '.ai-video');
+// app_mode: 'dist' when launched from a packaged app, 'source' otherwise
+const APP_MODE = detectAppMode(SCRIPT_DIR);
+const APP_SUPPORT_DIR = userSupportDir();
 const RUNTIME_ROOT = process.env.AI_VIDEO_RUNTIME_ROOT || (APP_MODE === 'dist' ? APP_SUPPORT_DIR : PROJECT_ROOT);
 const LOG_ROOT = process.env.AI_VIDEO_LOG_DIR || (APP_MODE === 'dist' ? path.join(APP_SUPPORT_DIR, 'logs') : path.join(PROJECT_ROOT, 'logs'));
 const REVIEW_SUBMIT_NODE_NAME = 'review_submit_resume';
@@ -634,7 +644,7 @@ function getN8nFormUrl() {
   const host = getConfiguredN8nHost();
   const workflowId = cfg.n8n_form_workflow_id || WF01_WORKFLOW_ID;
   try {
-    const webhookPath = execFileSync('sqlite3', [
+    const webhookPath = runSqlite([
       DB_PATH,
       `SELECT webhookPath FROM webhook_entity WHERE workflowId='${workflowId}' AND method='GET' LIMIT 1;`,
     ], { encoding: 'utf8' }).trim();
@@ -1177,7 +1187,7 @@ function findActiveExecutionForProject(projectId, workflowId = REVIEW_SUBMIT_WOR
     LIMIT 1;
   `;
   try {
-    const raw = execFileSync('sqlite3', ['-json', DB_PATH, sql], {
+    const raw = runSqlite(['-json', DB_PATH, sql], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
@@ -1200,7 +1210,7 @@ function findLatestExecutionForProject(projectId, workflowId = REVIEW_SUBMIT_WOR
     LIMIT 1;
   `;
   try {
-    const raw = execFileSync('sqlite3', ['-json', DB_PATH, sql], {
+    const raw = runSqlite(['-json', DB_PATH, sql], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
@@ -1239,7 +1249,7 @@ function queryRecentExecutions(limit = 30) {
       ORDER BY e.id DESC
       LIMIT ${n};
     `;
-    const raw = execFileSync('sqlite3', ['-json', DB_PATH, sql], {
+    const raw = runSqlite(['-json', DB_PATH, sql], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
     }).trim();
     return raw ? JSON.parse(raw) : [];
@@ -1255,7 +1265,7 @@ function findLatestWF01Execution(sinceMs = 0) {
       ORDER BY e.id DESC
       LIMIT 5;
     `;
-    const raw = execFileSync('sqlite3', ['-json', DB_PATH, sql], {
+    const raw = runSqlite(['-json', DB_PATH, sql], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
     }).trim();
     const rows = raw ? JSON.parse(raw) : [];
@@ -1307,7 +1317,7 @@ function buildExecutionDetailSummary(exec, redactFn = (s) => s) {
   if (exec.status !== 'error' && exec.status !== 'crashed') return base;
   try {
     const sql = `SELECT data FROM execution_data WHERE executionId = ${Number(exec.id) || 0} LIMIT 1;`;
-    const raw = execFileSync('sqlite3', [DB_PATH, sql], {
+    const raw = runSqlite([DB_PATH, sql], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
       maxBuffer: 16 * 1024 * 1024,
     }).trim();
@@ -1358,7 +1368,7 @@ function readExecutionErrorSummary(executionId) {
     LIMIT 1;
   `;
   try {
-    const raw = execFileSync('sqlite3', [DB_PATH, sql], {
+    const raw = runSqlite([DB_PATH, sql], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       maxBuffer: 16 * 1024 * 1024,
@@ -1411,7 +1421,7 @@ function readExecutionDataSummary(executionId) {
   const _sql = `SELECT data FROM execution_data WHERE executionId = ${Number(executionId) || 0} LIMIT 1;`;
   let _raw;
   try {
-    _raw = execFileSync('sqlite3', [DB_PATH, _sql], {
+    _raw = runSqlite([DB_PATH, _sql], {
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000,
       maxBuffer: 16 * 1024 * 1024,
     }).trim();
@@ -2845,7 +2855,7 @@ async function collectEnvStatus() {
   for (const { id, label } of WF_SPECS) {
     try {
       const eid = id.replace(/'/g, "''");
-      const raw = execFileSync('sqlite3', ['-json', DB_PATH,
+      const raw = runSqlite(['-json', DB_PATH,
         `SELECT id, name, active, nodes FROM workflow_entity WHERE id='${eid}' LIMIT 1;`,
       ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }).trim();
       const rows = raw ? JSON.parse(raw) : [];
@@ -5092,7 +5102,7 @@ function resolveReviewSubmitWebhookUrl() {
     LIMIT 1;
   `;
 
-  const webhookPath = execFileSync('sqlite3', [DB_PATH, sql], {
+  const webhookPath = runSqlite([DB_PATH, sql], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -5141,7 +5151,7 @@ function resolveWebhookUrl(workflowId, nodeName, label) {
     WHERE method='POST' AND workflowId='${safeId}' AND node='${safeNode}'
     ORDER BY webhookPath DESC LIMIT 1;
   `;
-  const webhookPath = execFileSync('sqlite3', [DB_PATH, sql], {
+  const webhookPath = runSqlite([DB_PATH, sql], {
     encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).trim().replace(/^\/+/, '');
   if (!webhookPath) throw new Error(`${label} webhook 尚未注册，请先同步并重启 n8n。`);
@@ -8059,7 +8069,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       try {
-        const raw = execFileSync('sqlite3', ['-json', DB_PATH,
+        const raw = runSqlite(['-json', DB_PATH,
           "SELECT count(*) AS c FROM workflow_entity WHERE id IN ('rKHHjD2QBlL6EhaM','scriptGenerateV1','storyboardGenerateV1','reviewSubmitVeoV2');",
         ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }).trim();
         const count = JSON.parse(raw || '[]')?.[0]?.c || 0;

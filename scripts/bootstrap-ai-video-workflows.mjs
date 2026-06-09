@@ -11,8 +11,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runSqlite } from '../lib/sqlite-exec.mjs';
 
 const ROOT = process.env.PROJECT_ROOT || path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const ITER_DIR = path.join(ROOT, '正式导入文件', 'iteration-v1');
@@ -35,7 +35,8 @@ function sqlString(value) {
 }
 
 function sqlite(query) {
-  return execFileSync('sqlite3', ['-cmd', '.timeout 8000', DB, query], {
+  // node:sqlite first (Windows portable ships no sqlite3 CLI), CLI fallback.
+  return runSqlite(['-cmd', '.timeout 8000', DB, query], {
     encoding: 'utf8',
   });
 }
@@ -232,7 +233,7 @@ PRAGMA foreign_keys=ON;
 const sqlPath = path.join(os.tmpdir(), `ai-video-bootstrap-${Date.now()}.sql`);
 fs.writeFileSync(sqlPath, sql);
 try {
-  execFileSync('sqlite3', [DB], {
+  runSqlite([DB], {
     input: fs.readFileSync(sqlPath, 'utf8'),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
