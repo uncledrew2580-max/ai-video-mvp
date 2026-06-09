@@ -45,6 +45,7 @@ import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { redactObject, redactString } from '../../app-server/shared/redact.mjs';
+import { runSqlite } from '../../lib/sqlite-exec.mjs';
 
 // Expose guard stubs so they are importable; calling them intentionally blocks the op.
 export { guardFinalMerge, guardReviewRerunShot, guardReviewSubmit, guardReviewSubmitVeoV2, guardVeo, guardVideoGeneration };
@@ -117,6 +118,12 @@ const report = {
   launcher_tail: null,              // redacted tail of AI Video.exe launcher output
   runtime_healthz: null,            // UI server (REVIEW_ASSET_PORT) probe
   n8n_healthz: null,                // n8n /healthz probe
+  // B8G: launcher-side workflow sync failure diagnostics (if the workbench never
+  // started because workflow sync aborted).
+  workflow_sync_failed: false,
+  sync_stage: null,
+  workflow_ids_checked: [],
+  sqlite_foreign_key_check: null,
   // config / presence milestones (best-effort, no generation)
   api_key_provided: false,
   api_key_saved_via_ui: false,
@@ -444,7 +451,12 @@ async function main() {
   // Always probe health + capture window diagnostics (whether or not it loaded).
   report.runtime_healthz = await httpProbe(`http://127.0.0.1:${UI_PORT}/`);
   report.n8n_healthz = await httpProbe(`http://127.0.0.1:${N8N_PORT}/healthz`);
-  const mainWin = await captureWindowDiagnostics(appRef);
+  // Race the window-diagnostics capture too — w.title()/w.evaluate() on an
+  // unresponsive window can hang, and must not run to the overall watchdog.
+  const mainWin = await Promise.race([
+    captureWindowDiagnostics(appRef),
+    sleep(15000).then(() => null),
+  ]);
 
   if (!page || !/^https?:\/\/127\.0\.0\.1:\d+/.test(page.url())) {
     // No-window / blank-splash diagnostics (B8E): record why, capture a screenshot
@@ -455,6 +467,24 @@ async function main() {
           : 'AI Video.exe created no window within the window timeout')
       : `window stuck at state=${report.window_state} (runtime=${report.runtime_healthz}, n8n=${report.n8n_healthz})`;
     try { report.launcher_tail = redactString(electronOut.buf.split('\n').filter(Boolean).slice(-8).join('\n')); } catch {}
+
+    // B8G: if the launcher aborted because workflow SYNC failed (e.g. an FK error),
+    // surface it as failed_stage=workflow_sync with the live foreign_key_check.
+    if (/工作流(版本)?同步失败|workflow[_ ]?sync|FOREIGN KEY/i.test(electronOut.buf)) {
+      report.workflow_sync_failed = true;
+      report.failed_stage = 'workflow_sync';
+      report.sync_stage = 'workflow_sync';
+      report.workflow_ids_checked = ['rKHHjD2QBlL6EhaM', 'conceptSelectStoryboardV1', 'scriptGenerateV1', 'storyboardGenerateV1', 'reviewSubmitVeoV2'];
+      try {
+        const dbPath = path.join(userSupportDir(), 'workflow-data', '.n8n', 'database.sqlite');
+        if (fs.existsSync(dbPath)) {
+          const raw = runSqlite(['-json', dbPath, 'PRAGMA foreign_key_check;'], { encoding: 'utf8' });
+          report.sqlite_foreign_key_check = raw ? JSON.parse(raw) : [];
+        } else {
+          report.sqlite_foreign_key_check = 'db_not_found';
+        }
+      } catch (e) { report.sqlite_foreign_key_check = `check_error: ${e.message}`; }
+    }
     if (mainWin) {
       const wins = appRef.windows();
       if (wins[0]) { await screenshot(wins[0], `00-${report.window_state || 'unknown'}.png`); report.screenshot_available = true; }

@@ -258,12 +258,30 @@ for (const { label, workflow, expectedId } of workflows) {
   const workflowExists =
     sqlite(`SELECT COUNT(*) FROM workflow_entity WHERE id=${sqlString(id)};`).trim() !== '0';
 
+  // ── FK-SAFE WRITE ORDER (P14-B8G) ────────────────────────────────────────────
+  // node:sqlite (the Windows portable's SQLite) enforces foreign keys by default.
+  // The version pointers (workflow_entity.activeVersionId and
+  // workflow_published_version.publishedVersionId) reference a workflow_history
+  // version row, so that row MUST exist before the pointers are set. We therefore
+  // write parents before children, mirroring the proven bootstrap order:
+  //   1) clear old version pointers   (activeVersionId=NULL, drop published_version)
+  //   2) INSERT/UPDATE workflow_entity (activeVersionId stays NULL for now)
+  //   3) INSERT shared_workflow        (new workflows only; parent: entity+project)
+  //   4) INSERT workflow_history       (creates the version the pointers reference)
+  //   5) set activeVersionId=versionId (parent now exists)
+  //   6) INSERT workflow_published_version (parent now exists)
+
+  // 1) Clear any pointer that could reference a soon-to-be-replaced version.
+  sql += `
+UPDATE workflow_entity SET "activeVersionId"=NULL WHERE id=${sqlString(id)};
+DELETE FROM workflow_published_version WHERE "workflowId"=${sqlString(id)};
+`;
+
+  // 2)/3) Create or refresh the workflow row (activeVersionId NULL until step 5).
   if (!workflowExists) {
-    // INSERT path — should be rare for this project
     const projectId = sqlite(
       `SELECT id FROM project WHERE type='personal' LIMIT 1;`,
     ).trim();
-
     sql += `
 INSERT INTO workflow_entity (
   "id", "name", "active", "nodes", "connections", "settings",
@@ -273,7 +291,7 @@ INSERT INTO workflow_entity (
 ) VALUES (
   ${sqlString(id)},
   ${sqlString(workflow.name)},
-  0,
+  ${shouldKeepActive},
   ${sqlString(workflow.nodes || [])},
   ${sqlString(workflow.connections || {})},
   ${sqlString(workflow.settings || {})},
@@ -293,7 +311,6 @@ VALUES (${sqlString(id)}, ${sqlString(projectId)}, 'workflow:owner',
   STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'));
 `;
   } else {
-    // UPDATE path
     sql += `
 UPDATE workflow_entity SET
   name = ${sqlString(workflow.name)},
@@ -304,23 +321,13 @@ UPDATE workflow_entity SET
   meta = ${sqlString(workflow.meta || {})},
   "versionId" = ${sqlString(versionId)},
   active = ${shouldKeepActive},
-  "activeVersionId" = ${shouldKeepActive ? sqlString(versionId) : 'NULL'},
+  "activeVersionId" = NULL,
   "updatedAt" = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW')
 WHERE id = ${sqlString(id)};
 `;
-
-    if (shouldKeepActive) {
-      sql += `
-INSERT INTO workflow_published_version ("workflowId","publishedVersionId","createdAt","updatedAt")
-VALUES (${sqlString(id)}, ${sqlString(versionId)},
-  STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
-ON CONFLICT("workflowId") DO UPDATE SET
-  "publishedVersionId" = excluded."publishedVersionId",
-  "updatedAt" = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW');
-`;
-    }
   }
 
+  // 4) Insert the history row — now the version exists for the pointers to use.
   sql += `
 INSERT INTO workflow_history (
   "versionId","workflowId","authors","nodes","connections",
@@ -333,6 +340,19 @@ INSERT INTO workflow_history (
 );
 `;
 
+  // 5)/6) Now the version row exists, point activeVersionId + published_version at it.
+  if (shouldKeepActive) {
+    sql += `
+UPDATE workflow_entity SET "activeVersionId"=${sqlString(versionId)} WHERE id=${sqlString(id)};
+INSERT INTO workflow_published_version ("workflowId","publishedVersionId","createdAt","updatedAt")
+VALUES (${sqlString(id)}, ${sqlString(versionId)},
+  STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'), STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW'))
+ON CONFLICT("workflowId") DO UPDATE SET
+  "publishedVersionId" = excluded."publishedVersionId",
+  "updatedAt" = STRFTIME('%Y-%m-%d %H:%M:%f', 'NOW');
+`;
+  }
+
   results.push({ label, id, name: workflow.name, versionId, wasActive: shouldKeepActive });
 }
 
@@ -340,15 +360,81 @@ sql += 'COMMIT;\n';
 
 // ── Execute ───────────────────────────────────────────────────────────────────
 
+// Structured FK dependency / write-plan context, surfaced on a sync failure so the
+// involved tables, dependencies, write stages and known trap columns are explicit.
+const SYNC_DEPENDENCY_CONTEXT = {
+  relevant_tables: ['project', 'workflow_entity', 'shared_workflow', 'workflow_history', 'workflow_published_version'],
+  foreign_keys: [
+    'shared_workflow.projectId -> project.id',
+    'shared_workflow.workflowId -> workflow_entity.id',
+    'workflow_history.workflowId -> workflow_entity.id',
+    'workflow_entity.activeVersionId -> workflow_history.versionId',
+    'workflow_published_version.publishedVersionId -> workflow_history.versionId',
+  ],
+  write_order: [
+    'clear pointers (activeVersionId=NULL, delete workflow_published_version)',
+    'upsert workflow_entity (activeVersionId stays NULL)',
+    'insert shared_workflow (new workflows only)',
+    'insert workflow_history (creates the version row)',
+    'set workflow_entity.activeVersionId = versionId',
+    'upsert workflow_published_version (publishedVersionId = versionId)',
+  ],
+  trap_tables: [
+    'workflow_entity.activeVersionId must be written AFTER workflow_history',
+    'workflow_published_version.publishedVersionId must be written AFTER workflow_history',
+  ],
+};
+
+// PRAGMA foreign_key_check returns one row per violation (table, rowid, parent, fkid).
+function pragmaForeignKeyCheck(dbPath) {
+  try {
+    const raw = runSqlite(['-json', dbPath, 'PRAGMA foreign_key_check;'], { encoding: 'utf8' });
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [{ error: String(e.message || e) }];
+  }
+}
+
 // os.tmpdir() (not hardcoded /tmp) so this works on Windows portable too.
 const sqlPath = path.join(os.tmpdir(), `sync-iteration-v1-${Date.now()}.sql`);
 fs.writeFileSync(sqlPath, sql);
 
+const _workflowIds = results.map((r) => r.id);
+// The whole sql is one BEGIN..COMMIT transaction; on any failure node:sqlite
+// throws and the uncommitted transaction is rolled back when the connection closes.
 try {
   runSqlite([DB], { input: fs.readFileSync(sqlPath, 'utf8'), stdio: ['pipe', 'inherit', 'inherit'] });
-} finally {
-  fs.unlinkSync(sqlPath);
+} catch (e) {
+  const msg = String(e.message || e);
+  const isFk = /FOREIGN KEY|foreign key|constraint failed|787/i.test(msg);
+  const diag = {
+    stage: 'workflow_sync',
+    is_foreign_key_error: isFk,
+    error_message: msg,
+    workflow_ids_checked: _workflowIds,
+    version_ids: results.map((r) => ({ id: r.id, versionId: r.versionId, wasActive: r.wasActive })),
+    foreign_key_check: pragmaForeignKeyCheck(DB),
+    sync_dependency_context: SYNC_DEPENDENCY_CONTEXT,
+  };
+  console.error('\n❌ 工作流版本同步失败：写入工作流时违反外键约束（事务已回滚，数据库未改动）。');
+  console.error(`错误：${msg}`);
+  console.error('诊断（同步阶段 / 外键检查 / 工作流与版本ID）：');
+  console.error(JSON.stringify(diag, null, 2));
+  console.error(`DB：${DB}`);
+  try { fs.unlinkSync(sqlPath); } catch {}
+  process.exit(1);
 }
+try { fs.unlinkSync(sqlPath); } catch {}
+
+// P14-B8G: after a successful sync the DB must be FK-clean (no silent violation).
+const _fkCheck = pragmaForeignKeyCheck(DB);
+if (Array.isArray(_fkCheck) && _fkCheck.length > 0) {
+  console.error('\n❌ 工作流同步后外键检查未通过（foreign_key_check 非空）：');
+  console.error(JSON.stringify({ stage: 'post_sync_foreign_key_check', foreign_key_check: _fkCheck, workflow_ids_checked: _workflowIds, sync_dependency_context: SYNC_DEPENDENCY_CONTEXT }, null, 2));
+  console.error(`DB：${DB}`);
+  process.exit(1);
+}
+console.log('外键检查通过（PRAGMA foreign_key_check clean）✓');
 
 console.log('\n同步完成:\n');
 for (const r of results) {
