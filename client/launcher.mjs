@@ -11,6 +11,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import http from 'node:http';
+import { waitForN8nDbSchemaReady } from '../scripts/win/n8n-db-ready.mjs';
 
 // ─── 路径 ──────────────────────────────────────────────────────────────────────
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -596,8 +597,28 @@ async function main() {
     // Create and migrate the DB first, then stop n8n before writing workflows.
     // SQLite can be locked while n8n is running, and active webhooks are only
     // registered during n8n startup anyway.
+    //
+    // P14-B8E: n8n reports /healthz ready BEFORE its first-run SQLite migrations
+    // finish. If we stop n8n and bootstrap now, the bootstrap opens an un-migrated
+    // DB ("schema is not ready") and aborts before the workbench ever starts
+    // (the B8D Windows failure). Wait — while n8n is still running — until the
+    // workflow schema actually exists, then stop n8n and bootstrap.
+    log('正在初始化本地工作流引擎…');
+    const schemaReady = await waitForN8nDbSchemaReady(n8nDbPathForUi, {
+      timeoutMs: 120000,
+      onWait: () => log('正在初始化本地工作流引擎…（首次启动需要完成数据库迁移）'),
+    });
     removeChild(children, n8nProc);
     await stopChild(n8nProc, 'n8n');
+
+    if (!schemaReady) {
+      if (_IS_DIST) {
+        fail(`n8n 数据库初始化未完成，请稍后重试或导出诊断包。\n日志：${join(LOG_DIR, 'n8n.log')}\nDB：${n8nDbPathForUi}`);
+        process.exit(1);
+      } else {
+        warn('n8n 数据库 schema 尚未就绪（120s 超时），工作流自检可能失败。');
+      }
+    }
 
     const bootstrap = runWorkflowBootstrap(n8nDbPathForUi);
     if (!bootstrap.ok) {

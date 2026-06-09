@@ -112,6 +112,9 @@ const report = {
   window_title: null,
   window_url: null,
   window_state: 'unknown',          // unknown | blank | splash | loaded
+  screenshot_available: false,      // a screenshot was captured
+  no_window_reason: null,           // why no workbench window (blank/splash/exit)
+  launcher_tail: null,              // redacted tail of AI Video.exe launcher output
   runtime_healthz: null,            // UI server (REVIEW_ASSET_PORT) probe
   n8n_healthz: null,                // n8n /healthz probe
   // config / presence milestones (best-effort, no generation)
@@ -431,17 +434,30 @@ async function main() {
   } catch {}
 
   // ── Wait for the workbench (fast, <=90s) ────────────────────────────────────
-  const page = await waitForWorkbench(appRef, WORKBENCH_MS);
+  // Hard race (B8E): a hung app.firstWindow() must never run to the overall
+  // watchdog — the wait resolves within ~WORKBENCH_MS even if Playwright blocks
+  // internally, so a no-window app fails near the window timeout, not the 9-min cap.
+  const page = await Promise.race([
+    waitForWorkbench(appRef, WORKBENCH_MS),
+    sleep(WORKBENCH_MS + 5000).then(() => null),
+  ]);
   // Always probe health + capture window diagnostics (whether or not it loaded).
   report.runtime_healthz = await httpProbe(`http://127.0.0.1:${UI_PORT}/`);
   report.n8n_healthz = await httpProbe(`http://127.0.0.1:${N8N_PORT}/healthz`);
   const mainWin = await captureWindowDiagnostics(appRef);
 
   if (!page || !/^https?:\/\/127\.0\.0\.1:\d+/.test(page.url())) {
-    // Blank/splash fast-fail — capture a screenshot of whatever is showing.
+    // No-window / blank-splash diagnostics (B8E): record why, capture a screenshot
+    // of any window that exists, and the launcher state tail (redacted).
+    report.no_window_reason = !report.window_detected
+      ? ((electronProc && electronProc.exitCode != null)
+          ? `AI Video.exe process exited (code ${electronProc.exitCode}) — no window created`
+          : 'AI Video.exe created no window within the window timeout')
+      : `window stuck at state=${report.window_state} (runtime=${report.runtime_healthz}, n8n=${report.n8n_healthz})`;
+    try { report.launcher_tail = redactString(electronOut.buf.split('\n').filter(Boolean).slice(-8).join('\n')); } catch {}
     if (mainWin) {
       const wins = appRef.windows();
-      if (wins[0]) await screenshot(wins[0], `00-${report.window_state || 'unknown'}.png`);
+      if (wins[0]) { await screenshot(wins[0], `00-${report.window_state || 'unknown'}.png`); report.screenshot_available = true; }
     }
     report.error_message = `workbench window did not load within ${WORKBENCH_MS}ms ` +
       `(state=${report.window_state}, runtime=${report.runtime_healthz}, n8n=${report.n8n_healthz})`;
@@ -449,6 +465,7 @@ async function main() {
     return;
   }
 
+  report.screenshot_available = true; // window loaded; subsequent steps screenshot
   report.window_state = 'loaded';
   report.stages.push('window_loaded');
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
