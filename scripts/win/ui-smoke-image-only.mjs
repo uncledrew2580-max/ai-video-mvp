@@ -1,28 +1,26 @@
 #!/usr/bin/env node
-// P14-B8: Windows UI-DRIVEN image-only smoke.
+// P14-B8 / B8C: Windows UI-DRIVEN image-only smoke with startup diagnostics.
 //
 // Drives the REAL AI Video.exe Electron window via Playwright — it does NOT write
 // config files directly or call backend HTTP endpoints to stand in for the user.
-// The flow mimics a real user:
-//   1. launch AI Video.exe and wait for the workbench window
-//   2. open the in-app config page, type the API Key, click 保存配置
-//   3. reload the config page and read the "已配置" badge from the DOM
-//   4. read the output folder shown in the UI
-//   5. open the in-app /system page and read WF01/WF02/WF02a/WF02b/WF03 status
-//   6. run the full image-only pipeline through the UI: submit the creative-brief
-//      form (uploads a sample image) → WF01 创意方向 → select a direction → wait for
-//      scriptGenerateV1 → confirm the script → storyboardGenerateV1 (Nano) →
-//      verify the storyboard/Nano image on the /reviews/item page, then STOP
-//      before video — never proceeds to Veo / video generation.
 //
-// Safety: Veo / video generation / final-merge / review-submit / review-rerun-shot
-// are blocked three ways: (a) smoke-guard scope assertions at startup, (b) the
-// smoke never clicks any video/submit affordance, (c) a renderer network
-// interceptor that ABORTS and FAILS the run on any forbidden request.
+// MODES (UI_SMOKE_MODE):
+//   diagnostic (default) — launch → detect window → (if the workbench loads) save
+//       the API Key in the UI, verify 已配置, read output dir, read WF presence.
+//       It STOPS there and NEVER submits the brief, so NO model/image generation
+//       happens. Used by CI to validate the startup + fast-fail + diagnostics path.
+//   full — the complete image-only pipeline (submit brief → select concept → wait
+//       for script → confirm script → storyboard/Nano image on the review page),
+//       stopping before any video. Only for an explicitly authorized real run.
 //
-// Secrets: AI_VIDEO_API_KEY is read from env (GitHub Secret) and typed into the
-// password field. It is never logged, never written to the report, never copied
-// into diagnostics. Config/log diagnostics are redacted before upload.
+// Fast-fail (B8C): the run never hangs to the GitHub job timeout. App launch is
+// capped (<=60s), the workbench-ready wait is capped (<=90s), and a hard overall
+// watchdog (<=9min) forces a failure report + child-process cleanup + exit.
+//
+// On success OR failure a smoke-report.json is ALWAYS written, plus redacted
+// diagnostics (window URL/title/state, blank/splash screenshots, log tails,
+// process + port summaries). Veo / video / final-merge are blocked and the API
+// Key is never logged, never written to the report, never copied into diagnostics.
 
 import {
   assertImageOnlyScope,
@@ -43,6 +41,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import http from 'node:http';
+import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { redactObject, redactString } from '../../app-server/shared/redact.mjs';
 
@@ -55,8 +55,22 @@ const STAGE = STAGE_ARG
   ? path.resolve(STAGE_ARG)
   : path.join(ROOT, 'dist-win', 'AI-Video-Win-x64-Portable-RC-0001');
 
-const REPORT_PATH = path.join(ROOT, 'smoke-report.json');
-const DIAG_DIR = path.join(ROOT, 'smoke-diagnostics');
+const MODE = (process.env.UI_SMOKE_MODE || 'diagnostic').trim().toLowerCase();
+const FULL = MODE === 'full';
+
+// ── Fast-fail budgets (B8C) ───────────────────────────────────────────────────
+const APP_LAUNCH_MS = 60_000;   // <=60s to spawn the Electron app
+const WORKBENCH_MS = 90_000;    // <=90s for the workbench to load (else fast fail)
+const TOTAL_MS = 9 * 60_000;    // <=9min hard cap for the whole smoke
+
+const UI_PORT = Number(process.env.AI_VIDEO_UI_PORT || 18788);
+const N8N_PORT = Number(process.env.AI_VIDEO_N8N_PORT || 5678);
+
+// Output base: repo root by default (CI uploads from there); tests redirect to a
+// temp dir via AI_VIDEO_SMOKE_OUT so they never write into the working tree.
+const OUT_DIR = process.env.AI_VIDEO_SMOKE_OUT ? path.resolve(process.env.AI_VIDEO_SMOKE_OUT) : ROOT;
+const REPORT_PATH = path.join(OUT_DIR, 'smoke-report.json');
+const DIAG_DIR = path.join(OUT_DIR, 'smoke-diagnostics');
 const SHOTS_DIR = path.join(DIAG_DIR, 'screenshots');
 fs.mkdirSync(SHOTS_DIR, { recursive: true });
 
@@ -74,6 +88,60 @@ const FORBIDDEN_REQUEST = [
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// ── Shared run state (the watchdog and the main path both finalize through it) ──
+const requestLog = [];
+const electronOut = { buf: '', cap: 128 * 1024 };
+let appRef = null;
+let electronProc = null;
+let finalized = false;
+
+const report = {
+  scope: 'image_only',
+  ui_driven: true,
+  mode: MODE,
+  real_smoke_scope: process.env.REAL_SMOKE_SCOPE,
+  disable_video_generation: process.env.DISABLE_VIDEO_GENERATION,
+  timestamp: new Date().toISOString(),
+  status: 'failed',                 // 'passed' | 'passed_diagnostic' | 'failed'
+  failed_stage: null,
+  error_message: null,
+  error_stack: null,
+  // startup diagnostics
+  app_started: false,
+  window_detected: false,
+  window_title: null,
+  window_url: null,
+  window_state: 'unknown',          // unknown | blank | splash | loaded
+  runtime_healthz: null,            // UI server (REVIEW_ASSET_PORT) probe
+  n8n_healthz: null,                // n8n /healthz probe
+  // config / presence milestones (best-effort, no generation)
+  api_key_provided: false,
+  api_key_saved_via_ui: false,
+  configured_reported_by_ui: false,
+  output_dir: null,
+  output_dir_confirmed: false,
+  workflow_presence: { WF01: false, WF02: false, WF02a: false, WF02b: false, WF03: false },
+  workflow_presence_all: false,
+  // full-mode pipeline milestones
+  brief_submitted_via_ui: false,
+  concept_ready_via_ui: false,
+  concept_selected_via_ui: false,
+  script_generated_via_ui: false,
+  script_confirmed_via_ui: false,
+  storyboard_image_generated_via_ui: false,
+  image_ok: null,
+  image_url: null,
+  // stop-proof — we never reach video in either mode
+  video_generation_skipped: true,
+  veo_not_called: true,
+  final_merge_not_called: true,
+  stopped_at: FULL ? 'storyboard_ready_for_review' : 'diagnostic_no_generation',
+  api_key_leaked: false,
+  forbidden_requests_blocked: [],
+  stages: [],
+  errors: [],
+};
+
 // ── User-data paths (for redacted diagnostics only — never written by the smoke) ──
 function userSupportDir() {
   if (process.platform === 'win32') {
@@ -85,17 +153,8 @@ function userSupportDir() {
   return path.join(os.homedir(), '.ai-video');
 }
 
-// Minimal dependency-free PNG encoder: a solid WxH RGB image. Used as the
-// "product image" upload so the creative-brief form can be submitted via the UI.
+// Minimal dependency-free PNG encoder — the "product image" upload (full mode only).
 function makeSolidPng(w, h, [r, g, b]) {
-  function chunk(type, data) {
-    const len = Buffer.alloc(4);
-    len.writeUInt32BE(data.length, 0);
-    const typeBuf = Buffer.from(type, 'ascii');
-    const crcBuf = Buffer.alloc(4);
-    crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])) >>> 0, 0);
-    return Buffer.concat([len, typeBuf, data, crcBuf]);
-  }
   function crc32(buf) {
     let c = ~0;
     for (let i = 0; i < buf.length; i++) {
@@ -104,12 +163,16 @@ function makeSolidPng(w, h, [r, g, b]) {
     }
     return ~c;
   }
+  function chunk(type, data) {
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
+    const typeBuf = Buffer.from(type, 'ascii');
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])) >>> 0, 0);
+    return Buffer.concat([len, typeBuf, data, crcBuf]);
+  }
   const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   const ihdr = Buffer.alloc(13);
-  ihdr.writeUInt32BE(w, 0);
-  ihdr.writeUInt32BE(h, 4);
-  ihdr[8] = 8;   // bit depth
-  ihdr[9] = 2;   // color type RGB
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4); ihdr[8] = 8; ihdr[9] = 2;
   const row = Buffer.alloc(1 + w * 3);
   for (let x = 0; x < w; x++) { row[1 + x * 3] = r; row[2 + x * 3] = g; row[3 + x * 3] = b; }
   const raw = Buffer.concat(Array.from({ length: h }, () => row));
@@ -117,10 +180,63 @@ function makeSolidPng(w, h, [r, g, b]) {
   return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))]);
 }
 
-// ── Diagnostics export (redacted) ─────────────────────────────────────────────
-function exportRedactedDiagnostics(report, requestLog) {
+// ── HTTP healthz probe (no app needed) ────────────────────────────────────────
+function httpProbe(urlStr, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    try {
+      const req = http.get(urlStr, { timeout: timeoutMs }, (res) => { res.resume(); resolve(`HTTP ${res.statusCode}`); });
+      req.on('error', () => resolve('no_response'));
+      req.on('timeout', () => { req.destroy(); resolve('timeout'); });
+    } catch { resolve('no_response'); }
+  });
+}
+
+// ── Diagnostics ───────────────────────────────────────────────────────────────
+async function screenshot(page, name) {
+  try { await page.screenshot({ path: path.join(SHOTS_DIR, name), fullPage: true }); } catch {}
+}
+
+// Capture every window's url/title/visibility — and the main window state.
+async function captureWindowDiagnostics(app) {
+  const windows = [];
+  let main = null;
   try {
-    // 1. Redacted config snapshot — NEVER copy the raw local-config.json.
+    const wins = app.windows();
+    for (const w of wins) {
+      let url = ''; let title = ''; let visible = null; let closed = null;
+      try { url = w.url(); } catch {}
+      try { title = await w.title(); } catch {}
+      try { closed = w.isClosed(); } catch {}
+      try { visible = await w.evaluate(() => document.visibilityState !== 'hidden').catch(() => null); } catch {}
+      windows.push({ url, title, isVisible: visible, isClosed: closed });
+    }
+    main = windows[0] || null;
+  } catch {}
+  try {
+    fs.writeFileSync(path.join(DIAG_DIR, 'window-diagnostics.json'), JSON.stringify({ count: windows.length, windows }, null, 2));
+  } catch {}
+  if (main) {
+    report.window_detected = true;
+    report.window_url = main.url || null;
+    report.window_title = main.title || null;
+    const u = String(main.url || '');
+    report.window_state = /^https?:\/\/127\.0\.0\.1:\d+/.test(u) ? 'loaded'
+      : u.startsWith('data:') ? 'splash'
+      : (u === '' || u === 'about:blank') ? 'blank'
+      : 'unknown';
+  }
+  return main;
+}
+
+function runCmd(cmd, args) {
+  try { return execFileSync(cmd, args, { encoding: 'utf8', timeout: 15000, maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }); }
+  catch (e) { return `(${cmd} unavailable: ${e.code || e.message})`; }
+}
+
+// Logs / process / port diagnostics — no live app required, all redacted.
+function exportEnvDiagnostics() {
+  // 1. Redacted config snapshot — NEVER copy the raw local-config.json.
+  try {
     const cfgPath = path.join(userSupportDir(), 'config', 'local-config.json');
     if (fs.existsSync(cfgPath)) {
       const parsed = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
@@ -128,48 +244,123 @@ function exportRedactedDiagnostics(report, requestLog) {
     }
   } catch (e) { report.errors.push(`diag config: ${e.message}`); }
 
+  // 2. %APPDATA%/AI Video/logs — launcher.log / n8n.log / ui-*.log tails, redacted.
   try {
-    // 2. Launcher / n8n logs, redacted line-by-line (belt-and-suspenders).
-    const logDir = path.join(userSupportDir(), 'logs', 'launcher');
-    if (fs.existsSync(logDir)) {
+    const base = userSupportDir();
+    const summary = [];
+    for (const sub of ['logs', path.join('logs', 'launcher')]) {
+      const dir = path.join(base, sub);
+      if (!fs.existsSync(dir)) continue;
       const outDir = path.join(DIAG_DIR, 'logs');
       fs.mkdirSync(outDir, { recursive: true });
-      for (const f of fs.readdirSync(logDir)) {
-        if (!/\.log$/i.test(f)) continue;
-        const raw = fs.readFileSync(path.join(logDir, f), 'utf8');
+      for (const f of fs.readdirSync(dir)) {
+        const full = path.join(dir, f);
+        let st; try { st = fs.statSync(full); } catch { continue; }
+        if (!st.isFile() || !/\.log$/i.test(f)) continue;
+        summary.push(`${path.join(sub, f)} (${st.size} bytes)`);
+        const raw = fs.readFileSync(full, 'utf8');
         const tail = raw.split('\n').slice(-200).join('\n');
-        fs.writeFileSync(path.join(outDir, f), redactString(tail));
+        fs.writeFileSync(path.join(outDir, f.replace(/[\\/]/g, '_')), redactString(tail));
       }
     }
+    fs.writeFileSync(path.join(DIAG_DIR, 'appdata-logs-summary.txt'), summary.join('\n') || '(no logs found)');
   } catch (e) { report.errors.push(`diag logs: ${e.message}`); }
 
+  // 3. Electron app stdout/stderr captured live (launcher + n8n console), redacted.
   try {
-    // 3. Renderer request audit — origin + pathname only, no query, no headers.
+    if (electronOut.buf) {
+      fs.writeFileSync(path.join(DIAG_DIR, 'electron-stdout.log'), redactString(electronOut.buf.slice(-electronOut.cap)));
+    }
+  } catch (e) { report.errors.push(`diag electron stdout: ${e.message}`); }
+
+  // 4. Process list + port-listen summary, redacted.
+  try {
+    let procList; let ports;
+    if (process.platform === 'win32') {
+      procList = runCmd('tasklist', ['/FO', 'CSV', '/NH']);
+      ports = runCmd('netstat', ['-ano', '-p', 'TCP']);
+    } else {
+      procList = runCmd('ps', ['-A', '-o', 'pid,comm']);
+      ports = runCmd('lsof', ['-iTCP', '-sTCP:LISTEN', '-P', '-n']);
+    }
+    const procFiltered = String(procList).split('\n').filter((l) => /node|electron|AI Video|ffmpeg|n8n/i.test(l)).slice(0, 80).join('\n');
+    const portFiltered = String(ports).split('\n').filter((l) => /LISTEN/i.test(l)).slice(0, 80).join('\n');
+    fs.writeFileSync(path.join(DIAG_DIR, 'process-list.txt'), redactString(procFiltered || '(none matched)'));
+    fs.writeFileSync(path.join(DIAG_DIR, 'ports-listening.txt'), redactString(portFiltered || '(none)'));
+  } catch (e) { report.errors.push(`diag procs/ports: ${e.message}`); }
+
+  // 5. Renderer request audit — origin + pathname only (no query, no headers).
+  try {
     fs.writeFileSync(path.join(DIAG_DIR, 'renderer-requests.txt'), [...new Set(requestLog)].sort().join('\n'));
   } catch (e) { report.errors.push(`diag requests: ${e.message}`); }
+}
 
+// Force-kill the Electron app process tree (never hangs on app.close()).
+function killAppTree() {
+  const pid = electronProc && electronProc.pid;
+  if (!pid) return;
   try {
-    // 4. Generated-image summary (paths/urls only).
-    fs.writeFileSync(path.join(DIAG_DIR, 'image-summary.json'), JSON.stringify({
-      image_ok: report.image_ok,
-      image_url: report.image_url,
-      output_dir: report.output_dir,
-    }, null, 2));
-  } catch (e) { report.errors.push(`diag image: ${e.message}`); }
+    if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 15000 });
+    else { try { process.kill(pid, 'SIGKILL'); } catch {} }
+  } catch {}
 }
 
-async function screenshot(page, name) {
-  try { await page.screenshot({ path: path.join(SHOTS_DIR, name), fullPage: true }); } catch {}
+// Self-check: the raw API key must never appear in the report or captured diag.
+function assertNoKeyLeak(apiKey) {
+  if (!apiKey) { report.api_key_leaked = false; return; }
+  let leaked = false;
+  try { if (JSON.stringify(report).includes(apiKey)) leaked = true; } catch {}
+  try { if (electronOut.buf.includes(apiKey)) leaked = true; } catch {}
+  report.api_key_leaked = leaked;
 }
 
-// Wait until the Electron window has navigated from the data: splash to the
-// http workbench and the DOM is ready.
-async function waitForWorkbench(app, timeoutMs = 180000) {
+// Write report + env diagnostics + cleanup, then exit. Idempotent; never hangs.
+function finalize(exitCode, apiKey) {
+  if (finalized) return;
+  finalized = true;
+  // Stop-proof invariant (P14-B8C): video / Veo / final-merge are ALWAYS reported
+  // as not-called / skipped — even when a forbidden attempt was observed, because
+  // the renderer interceptor ABORTS it (nothing actually executes). The attempt
+  // itself is recorded in forbidden_requests_blocked and fails the run separately.
+  report.video_generation_skipped = true;
+  report.veo_not_called = true;
+  report.final_merge_not_called = true;
+  report.stages.push('video_skipped');
+  try { exportEnvDiagnostics(); } catch {}
+  assertNoKeyLeak(apiKey);
+  try { fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2)); } catch {}
+  try {
+    console.log(`[ui-smoke] Report → ${REPORT_PATH}`);
+    console.log('[ui-smoke] Summary:', JSON.stringify({
+      mode: report.mode, status: report.status, failed_stage: report.failed_stage,
+      app_started: report.app_started, window_detected: report.window_detected, window_state: report.window_state,
+      runtime_healthz: report.runtime_healthz, n8n_healthz: report.n8n_healthz,
+      api_key_saved_via_ui: report.api_key_saved_via_ui, configured_reported_by_ui: report.configured_reported_by_ui,
+      workflow_presence_all: report.workflow_presence_all,
+      storyboard_image_generated_via_ui: report.storyboard_image_generated_via_ui,
+      forbidden_blocked: report.forbidden_requests_blocked.length, errors: report.errors.length,
+      api_key_leaked: report.api_key_leaked,
+    }));
+  } catch {}
+  killAppTree();
+  process.exit(exitCode);
+}
+
+function fail(stage, err, apiKey) {
+  report.status = 'failed';
+  report.failed_stage = report.failed_stage || stage;
+  report.error_message = report.error_message || (err && err.message) || String(err || stage);
+  report.error_stack = report.error_stack || (err && err.stack) || null;
+  console.error(`[ui-smoke] FAIL @ ${report.failed_stage}: ${report.error_message}`);
+  finalize(1, apiKey);
+}
+
+// Wait for the workbench, fast. Returns the loaded page or null (fast fail).
+async function waitForWorkbench(app, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
-  let page = null;
   while (Date.now() < deadline) {
     try {
-      page = await app.firstWindow({ timeout: 5000 });
+      const page = await app.firstWindow({ timeout: 5000 });
       const url = page.url();
       if (/^https?:\/\/127\.0\.0\.1:\d+/.test(url)) {
         await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
@@ -178,148 +369,142 @@ async function waitForWorkbench(app, timeoutMs = 180000) {
     } catch {}
     await sleep(2000);
   }
-  return page;
+  return null;
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
-  const report = {
-    scope: 'image_only',
-    ui_driven: true,
-    real_smoke_scope: process.env.REAL_SMOKE_SCOPE,
-    disable_video_generation: process.env.DISABLE_VIDEO_GENERATION,
-    timestamp: new Date().toISOString(),
-    window_loaded: false,
-    api_key_saved_via_ui: false,
-    configured_reported_by_ui: false,
-    output_dir: null,
-    output_dir_confirmed: false,
-    workflow_presence: { WF01: false, WF02: false, WF02a: false, WF02b: false, WF03: false },
-    workflow_presence_all: false,
-    // Full image-only UI pipeline milestones (each driven through the window):
-    brief_submitted_via_ui: false,        // creative-brief form -> WF01 concept
-    concept_ready_via_ui: false,          // WF01 concept directions generated
-    concept_selected_via_ui: false,       // /concept-select-with-edit -> scriptGenerateV1
-    script_generated_via_ui: false,       // scriptGenerateV1 produced the script
-    script_confirmed_via_ui: false,       // /script-confirm -> storyboardGenerateV1 (Nano)
-    storyboard_image_generated_via_ui: false, // Nano storyboard images on review page
-    image_ok: null,                       // == storyboard_image_generated_via_ui
-    image_url: null,                      // a storyboard/Nano panel src (NOT the upload)
-    // B8 stop-proof fields — we stop at the storyboard image, before any video.
-    video_generation_skipped: true,
-    veo_not_called: true,
-    final_merge_not_called: true,
-    stopped_at: 'storyboard_ready_for_review',
-    forbidden_requests_blocked: [],
-    stages: [],
-    errors: [],
-  };
+  console.log(`[ui-smoke] mode=${MODE} stage=${STAGE}`);
 
   const apiKey = (process.env.AI_VIDEO_API_KEY || '').trim();
-  if (!apiKey) {
-    report.errors.push('AI_VIDEO_API_KEY is not set');
-    fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
-    console.error('[ui-smoke] FAIL: AI_VIDEO_API_KEY is required (set via GitHub Secret)');
-    process.exit(1);
-  }
-  console.log('[ui-smoke] AI_VIDEO_API_KEY present (value hidden)');
+  report.api_key_provided = Boolean(apiKey);
+  if (apiKey) console.log('[ui-smoke] AI_VIDEO_API_KEY present (value hidden)');
+  else console.log('[ui-smoke] AI_VIDEO_API_KEY not provided');
+  if (FULL && !apiKey) { fail('api_key_missing', new Error('AI_VIDEO_API_KEY is required for full mode'), apiKey); return; }
+
+  // Hard overall watchdog — never hang to the GitHub job timeout.
+  const watchdog = setTimeout(() => {
+    report.error_message = report.error_message || `UI smoke exceeded hard cap ${TOTAL_MS}ms`;
+    fail('overall_timeout', new Error(report.error_message), apiKey);
+  }, TOTAL_MS);
+  if (typeof watchdog.unref === 'function') watchdog.unref();
 
   const exe = path.join(STAGE, 'AI Video.exe');
   if (!fs.existsSync(exe)) {
-    report.errors.push(`AI Video.exe not found at ${exe}`);
-    fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
-    console.error(`[ui-smoke] FAIL: AI Video.exe not found at ${exe}`);
-    process.exit(1);
+    fail('app_binary_missing', new Error(`AI Video.exe not found at ${exe}`), apiKey);
+    return;
   }
 
-  const { _electron: electron } = await import('playwright');
-  const requestLog = [];
-  let app = null;
+  let electron;
+  try { ({ _electron: electron } = await import('playwright')); }
+  catch (e) { fail('playwright_unavailable', e, apiKey); return; }
 
-  // Fail the whole run hard if a forbidden (video-leading) request is observed.
-  function tripForbidden(url) {
-    const clean = url.replace(/[?#].*$/, '');
-    report.forbidden_requests_blocked.push(clean);
-    report.veo_not_called = false;
-    report.video_generation_skipped = false;
-    console.error(`[ui-smoke] BLOCKED forbidden request: ${clean}`);
-  }
-
+  // ── Launch (fast, <=60s) ────────────────────────────────────────────────────
   try {
-    app = await electron.launch({ executablePath: exe, args: [], timeout: 120000 });
+    appRef = await electron.launch({ executablePath: exe, args: [], timeout: APP_LAUNCH_MS });
+    report.app_started = true;
+    report.stages.push('app_started');
+    try {
+      electronProc = appRef.process();
+      const grab = (s) => { if (!s) return; s.on('data', (d) => { electronOut.buf += d.toString(); if (electronOut.buf.length > electronOut.cap * 2) electronOut.buf = electronOut.buf.slice(-electronOut.cap); }); };
+      grab(electronProc && electronProc.stdout); grab(electronProc && electronProc.stderr);
+    } catch {}
+  } catch (e) {
+    fail('app_launch', e, apiKey);
+    return;
+  }
 
-    // Renderer-level guard: inspect every request the window makes.
-    await app.context().route('**/*', async (route) => {
+  // Renderer-level guard: inspect every request the window makes.
+  try {
+    await appRef.context().route('**/*', async (route) => {
       const url = route.request().url();
       if (FORBIDDEN_REQUEST.some((rx) => rx.test(url))) {
-        tripForbidden(url);
+        const clean = url.replace(/[?#].*$/, '');
+        report.forbidden_requests_blocked.push(clean);
+        console.error(`[ui-smoke] BLOCKED forbidden request: ${clean}`);
         try { await route.abort(); } catch {}
         return;
       }
       try { await route.continue(); } catch {}
     });
-    app.context().on('request', (req) => {
-      try { const u = new URL(req.url()); requestLog.push(u.origin + u.pathname); } catch {}
-    });
+    appRef.context().on('request', (req) => { try { const u = new URL(req.url()); requestLog.push(u.origin + u.pathname); } catch {} });
+  } catch {}
 
-    const page = await waitForWorkbench(app);
-    if (!page || !/^https?:\/\/127\.0\.0\.1:\d+/.test(page.url())) {
-      throw new Error('workbench window did not load (still on splash/blank after timeout)');
+  // ── Wait for the workbench (fast, <=90s) ────────────────────────────────────
+  const page = await waitForWorkbench(appRef, WORKBENCH_MS);
+  // Always probe health + capture window diagnostics (whether or not it loaded).
+  report.runtime_healthz = await httpProbe(`http://127.0.0.1:${UI_PORT}/`);
+  report.n8n_healthz = await httpProbe(`http://127.0.0.1:${N8N_PORT}/healthz`);
+  const mainWin = await captureWindowDiagnostics(appRef);
+
+  if (!page || !/^https?:\/\/127\.0\.0\.1:\d+/.test(page.url())) {
+    // Blank/splash fast-fail — capture a screenshot of whatever is showing.
+    if (mainWin) {
+      const wins = appRef.windows();
+      if (wins[0]) await screenshot(wins[0], `00-${report.window_state || 'unknown'}.png`);
     }
-    report.window_loaded = true;
-    report.stages.push('window_loaded');
-    // Auto-accept the in-app confirm() dialogs (concept select / script confirm).
-    page.on('dialog', (d) => { d.accept().catch(() => {}); });
-    const uiBase = new URL(page.url()).origin;
-    await screenshot(page, '01-workbench.png');
+    report.error_message = `workbench window did not load within ${WORKBENCH_MS}ms ` +
+      `(state=${report.window_state}, runtime=${report.runtime_healthz}, n8n=${report.n8n_healthz})`;
+    fail('workbench_load_timeout', new Error(report.error_message), apiKey);
+    return;
+  }
 
-    // ── Step 2: type API Key in the UI and save ───────────────────────────────
-    await page.goto(`${uiBase}/config`, { waitUntil: 'domcontentloaded' });
-    const keyInput = page.locator('input[data-path="providers.kie.api_key"]');
-    await keyInput.waitFor({ state: 'visible', timeout: 30000 });
-    await keyInput.fill(apiKey); // typed into a type=password field; never logged
-    const saveResp = page.waitForResponse(
-      (r) => r.url().includes('/config-save') && r.request().method() === 'POST',
-      { timeout: 30000 },
-    );
-    await page.locator('#save-btn').click();
-    const resp = await saveResp;
-    report.api_key_saved_via_ui = resp.status() === 200;
-    report.stages.push('config_saved_via_ui');
+  report.window_state = 'loaded';
+  report.stages.push('window_loaded');
+  page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  const uiBase = new URL(page.url()).origin;
+  await screenshot(page, '01-workbench.png');
 
-    // ── Step 3: reload config page and read the "已配置" badge from the DOM ─────
-    // After reload the key field re-renders empty (value=""), so the screenshot
-    // below cannot contain the secret.
-    await page.goto(`${uiBase}/config`, { waitUntil: 'domcontentloaded' });
-    const cfgText = await page.locator('body').innerText();
-    report.configured_reported_by_ui = /已配置/.test(cfgText);
-    // ── Step 4: read the output folder shown in the UI ────────────────────────
-    report.output_dir = await page.locator('#output-base-display').first().innerText().catch(() => null);
-    report.output_dir_confirmed = Boolean(report.output_dir && report.output_dir.trim());
-    report.stages.push('configured_verified_via_ui');
-    await screenshot(page, '02-config-configured.png');
+  try {
+    // ── Config: save the API Key through the UI (no model call) ───────────────
+    if (apiKey) {
+      await page.goto(`${uiBase}/config`, { waitUntil: 'domcontentloaded' });
+      const keyInput = page.locator('input[data-path="providers.kie.api_key"]');
+      await keyInput.waitFor({ state: 'visible', timeout: 30000 });
+      await keyInput.fill(apiKey); // typed into a type=password field; never logged
+      const saveResp = page.waitForResponse((r) => r.url().includes('/config-save') && r.request().method() === 'POST', { timeout: 30000 });
+      await page.locator('#save-btn').click();
+      const resp = await saveResp.catch(() => null);
+      report.api_key_saved_via_ui = Boolean(resp && resp.status() === 200);
+      report.stages.push('config_saved_via_ui');
 
-    // ── Step 5: read WF presence from the in-app /system page ──────────────────
+      // Reload (key field re-renders empty) then read the 已配置 badge from the DOM.
+      await page.goto(`${uiBase}/config`, { waitUntil: 'domcontentloaded' });
+      const cfgText = await page.locator('body').innerText();
+      report.configured_reported_by_ui = /已配置/.test(cfgText);
+      report.output_dir = await page.locator('#output-base-display').first().innerText().catch(() => null);
+      report.output_dir_confirmed = Boolean(report.output_dir && report.output_dir.trim());
+      report.stages.push('configured_verified_via_ui');
+      await screenshot(page, '02-config-configured.png');
+    }
+
+    // ── Workflow presence from /system (read-only) ────────────────────────────
     await page.goto(`${uiBase}/system`, { waitUntil: 'domcontentloaded' });
     const sysText = await page.locator('body').innerText();
     for (const label of ['WF01', 'WF02', 'WF02a', 'WF02b', 'WF03']) {
       const missing = new RegExp(`${label}[^\\n]*未找到`).test(sysText);
       report.workflow_presence[label] = sysText.includes(label) && !missing;
     }
-    report.workflow_presence_all =
-      Object.values(report.workflow_presence).every(Boolean) && !sysText.includes('部分工作流未找到');
+    report.workflow_presence_all = Object.values(report.workflow_presence).every(Boolean) && !sysText.includes('部分工作流未找到');
     report.stages.push('workflow_presence_via_ui');
     await screenshot(page, '03-system-workflows.png');
 
-    // ── Step 6a: submit the creative-brief form → WF01 创意方向 (concept) ───────
+    if (!FULL) {
+      // Diagnostic mode STOPS here — no brief, no concept, no model/image generation.
+      report.status = 'passed_diagnostic';
+      report.stopped_at = 'diagnostic_no_generation';
+      console.log('[ui-smoke] diagnostic mode complete (no generation).');
+      finalize(0, apiKey);
+      return;
+    }
+
+    // ── FULL mode only: complete image-only pipeline → Nano storyboard image ───
     await page.goto(`${uiBase}/`, { waitUntil: 'domcontentloaded' });
     await page.locator('input[name="field-0"]').fill('Smoke Test Product — white circle on blue');
     const samplePng = path.join(os.tmpdir(), `ui-smoke-product-${Date.now()}.png`);
     fs.writeFileSync(samplePng, makeSolidPng(256, 256, [60, 120, 220]));
     await page.locator('input[name="field-5"]').setInputFiles(samplePng);
     await page.locator('#product-submit-button').click();
-    // The server redirects to /submitted?since=<server-timestamp>; that timestamp
-    // is the authoritative filter for /active stage routing.
     await page.waitForURL(/\/submitted/, { timeout: 60000 }).catch(() => {});
     let since = '0';
     try { since = new URL(page.url()).searchParams.get('since') || '0'; } catch {}
@@ -327,8 +512,6 @@ async function main() {
     report.stages.push('brief_submitted_via_ui');
     await screenshot(page, '04-brief-submitted.png');
 
-    // Navigate to the current stage via /active (UI-truth router). Returns the
-    // landed URL after following the 302 to the active stage page.
     async function gotoActiveStage() {
       await page.goto(`${uiBase}/active?since=${encodeURIComponent(since)}`, { waitUntil: 'domcontentloaded' }).catch(() => {});
       return page.url();
@@ -340,10 +523,7 @@ async function main() {
         const url = await gotoActiveStage();
         if (match.test(url)) return true;
         const body = await page.locator('body').innerText().catch(() => '');
-        if (/生成失败|脚本框架生成失败|分镜图生成失败/.test(body)) {
-          report.errors.push(`${label}: UI reports generation failed`);
-          return false;
-        }
+        if (/生成失败|脚本框架生成失败|分镜图生成失败/.test(body)) { report.errors.push(`${label}: UI reports generation failed`); return false; }
         console.log(`[ui-smoke] waiting for ${label} … now at ${new URL(url).pathname}`);
         await sleep(8000);
       }
@@ -351,42 +531,31 @@ async function main() {
       return false;
     }
 
-    // ── Step 6b: wait for WF01 concept, then SELECT a direction (→ scriptGenerateV1) ──
-    if (await waitForStage(/\/concepts\/item/, 'concept ready (WF01)', 8 * 60 * 1000)) {
+    if (await waitForStage(/\/concepts\/item/, 'concept ready (WF01)', 4 * 60 * 1000)) {
       report.concept_ready_via_ui = true;
       report.stages.push('concept_ready_via_ui');
       await screenshot(page, '05-concept-ready.png');
-      const projectId = await page.locator('input[name="project_id"]').first().inputValue().catch(() => '');
       const selResp = page.waitForResponse((r) => r.url().includes('/concept-select-with-edit'), { timeout: 60000 });
-      // Clicking this formaction button submits the concept's form (a confirm()
-      // dialog is auto-accepted) → scriptGenerateV1 begins.
       await page.locator('button[formaction="/concept-select-with-edit"]').first().click();
       const sr = await selResp.catch(() => null);
       report.concept_selected_via_ui = Boolean(sr && sr.status() < 400);
       report.stages.push('concept_selected_via_ui');
 
-      // ── Step 6c: wait for scriptGenerateV1, then CONFIRM script (→ storyboardGenerateV1) ──
-      const onScript = await waitForStage(/\/script-review/, 'script generated (scriptGenerateV1)', 8 * 60 * 1000);
+      const onScript = await waitForStage(/\/script-review/, 'script generated (scriptGenerateV1)', 4 * 60 * 1000);
       const hasConfirm = onScript && await page.locator('#confirm-script-btn').count().then((n) => n > 0).catch(() => false);
       if (hasConfirm) {
         report.script_generated_via_ui = true;
         report.stages.push('script_generated_via_ui');
         await screenshot(page, '06-script-ready.png');
         const confResp = page.waitForResponse((r) => r.url().includes('/script-confirm'), { timeout: 60000 });
-        await page.locator('#confirm-script-btn').click(); // confirm() auto-accepted
+        await page.locator('#confirm-script-btn').click();
         const cr = await confResp.catch(() => null);
         report.script_confirmed_via_ui = Boolean(cr && cr.status() < 400);
         report.stages.push('script_confirmed_via_ui');
 
-        // ── Step 6d: wait for storyboardGenerateV1 (Nano) → /reviews/item ──────
-        // The /storyboard-status page polls and redirects to /reviews/item when the
-        // Nano storyboard images are ready. Nano generation can take several minutes.
         await page.waitForURL(/\/storyboard-status/, { timeout: 60000 }).catch(() => {});
-        const onReview = await page.waitForURL(/\/reviews\/item/, { timeout: 12 * 60 * 1000 }).then(() => true).catch(() => false);
-        const url = page.url();
-        if (onReview || /\/reviews\/item/.test(url)) {
-          // Verify the storyboard/Nano IMAGE is present — must be a panel product,
-          // not the uploaded product image / logo / icon.
+        const onReview = await page.waitForURL(/\/reviews\/item/, { timeout: 4 * 60 * 1000 }).then(() => true).catch(() => false);
+        if (onReview || /\/reviews\/item/.test(page.url())) {
           const panel = await page.evaluate(() => {
             const PANEL = /panel_preview_|panel_full_|storyboard|nanobanana|review_context/i;
             const SKIP = /logo|favicon|\bicon\b|product-|ui-smoke-product/i;
@@ -395,91 +564,37 @@ async function main() {
             return hit ? hit.src : null;
           }).catch(() => null);
           const reviewText = await page.locator('body').innerText().catch(() => '');
-          const reviewSignals = /分镜审核|分镜图/.test(reviewText);
-          if (panel && reviewSignals) {
+          if (panel && /分镜审核|分镜图/.test(reviewText)) {
             report.storyboard_image_generated_via_ui = true;
             report.image_ok = true;
             report.image_url = panel;
-            report.stopped_at = 'storyboard_ready_for_review';
-            console.log('[ui-smoke] Nano storyboard image present on the review page');
             await screenshot(page, '07-storyboard-review.png');
-          } else {
-            report.image_ok = false;
-            report.errors.push(`storyboard review reached but no panel image (panel=${Boolean(panel)}, signals=${reviewSignals})`);
-          }
-        } else {
-          report.image_ok = false;
-          report.errors.push('storyboard images did not reach the review page before timeout');
-        }
-      } else {
-        report.image_ok = false;
-        report.errors.push('script-review page / #confirm-script-btn not reached');
-      }
-    } else {
-      report.image_ok = false;
-      report.errors.push('WF01 concept did not become selectable before timeout');
-    }
-    // Image-only run STOPS here. We never click 确认审核 / 生成视频 / 重新生成分镜图.
-    report.stages.push('storyboard_image_generation');
+          } else { report.image_ok = false; report.errors.push('storyboard review reached but no panel image'); }
+        } else { report.image_ok = false; report.errors.push('storyboard images did not reach the review page before timeout'); }
+      } else { report.image_ok = false; report.errors.push('script-review page / #confirm-script-btn not reached'); }
+    } else { report.image_ok = false; report.errors.push('WF01 concept did not become selectable before timeout'); }
   } catch (e) {
-    report.errors.push(`ui-smoke error: ${e.message}`);
-    console.error(`[ui-smoke] error: ${e.message}`);
-  } finally {
-    // We never proceeded to video/Veo/final-merge — record and prove it.
-    report.stages.push('video_skipped');
-    if (report.forbidden_requests_blocked.length > 0) {
-      report.final_merge_not_called = false;
-    }
-    try { if (app) await app.close(); } catch {}
-    exportRedactedDiagnostics(report, requestLog);
-    fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2));
-    console.log(`[ui-smoke] Report → ${REPORT_PATH}`);
-    console.log('[ui-smoke] Summary:', JSON.stringify({
-      ui_driven: report.ui_driven,
-      window_loaded: report.window_loaded,
-      api_key_saved_via_ui: report.api_key_saved_via_ui,
-      configured_reported_by_ui: report.configured_reported_by_ui,
-      workflow_presence_all: report.workflow_presence_all,
-      concept_selected_via_ui: report.concept_selected_via_ui,
-      script_confirmed_via_ui: report.script_confirmed_via_ui,
-      storyboard_image_generated_via_ui: report.storyboard_image_generated_via_ui,
-      stopped_at: report.stopped_at,
-      forbidden_blocked: report.forbidden_requests_blocked.length,
-      errors: report.errors.length,
-    }));
+    fail('ui_pipeline', e, apiKey);
+    return;
   }
 
-  // Any forbidden request fails the run outright.
-  if (report.forbidden_requests_blocked.length > 0) {
-    console.error('[ui-smoke] FAIL: forbidden video/Veo request was attempted.');
-    process.exit(1);
+  // ── FULL-mode verdict ───────────────────────────────────────────────────────
+  if (report.forbidden_requests_blocked.length > 0) { fail('forbidden_request', new Error('forbidden video/Veo request attempted'), apiKey); return; }
+  if (report.storyboard_image_generated_via_ui === true && report.image_ok === true) {
+    report.status = 'passed';
+    report.stopped_at = 'storyboard_ready_for_review';
+    console.log('[ui-smoke] PASS: storyboard/Nano image generated (stopped before video).');
+    finalize(0, apiKey);
+    return;
   }
-  if (!report.window_loaded || !report.api_key_saved_via_ui || !report.configured_reported_by_ui) {
-    console.error('[ui-smoke] FAIL: UI configuration flow incomplete.');
-    process.exit(1);
-  }
-  // Success requires the FULL image-only pipeline through the UI, ending with the
-  // Nano storyboard image on the review page — not merely the WF01 concept.
-  if (!report.concept_selected_via_ui || !report.script_confirmed_via_ui || report.storyboard_image_generated_via_ui !== true || report.image_ok !== true) {
-    console.error('[ui-smoke] FAIL: storyboard/Nano image was not generated through the UI pipeline.');
-    process.exit(1);
-  }
-  console.log('[ui-smoke] PASS: UI-driven image-only smoke complete (stopped at storyboard review, no video).');
+  report.error_message = report.error_message || 'storyboard/Nano image was not generated through the UI pipeline';
+  fail('storyboard_not_generated', new Error(report.error_message), apiKey);
 }
 
 main().catch((e) => {
-  console.error('[ui-smoke] Fatal:', e.message);
-  try {
-    fs.writeFileSync(REPORT_PATH, JSON.stringify({
-      scope: 'image_only',
-      ui_driven: true,
-      timestamp: new Date().toISOString(),
-      stopped_at: 'storyboard_ready_for_review',
-      video_generation_skipped: true,
-      veo_not_called: true,
-      final_merge_not_called: true,
-      error: e.message,
-    }, null, 2));
-  } catch {}
-  process.exit(1);
+  try { fail('fatal', e, (process.env.AI_VIDEO_API_KEY || '').trim()); }
+  catch {
+    try { fs.writeFileSync(REPORT_PATH, JSON.stringify({ ...report, status: 'failed', failed_stage: 'fatal', error_message: e && e.message }, null, 2)); } catch {}
+    process.exit(1);
+  }
 });

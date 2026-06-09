@@ -66,3 +66,7 @@ diagnostics/
 .DS_Store
 **/.DS_Store
 *.log
+
+# P14-B8 UI smoke local outputs (never commit)
+smoke-report.json
+smoke-diagnostics/

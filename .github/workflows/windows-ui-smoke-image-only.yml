@@ -17,7 +17,15 @@ on:
       artifact_run_id:
         description: 'Run ID of the windows-portable.yml build that produced AI-Video-Win-x64-Portable-RC-0001'
         required: false
-        default: '27184958813'
+        default: '27188590985'
+      mode:
+        description: 'diagnostic = startup/diagnostics only, NO image generation (default); full = real image-only pipeline (requires explicit authorization)'
+        required: false
+        default: 'diagnostic'
+        type: choice
+        options:
+          - diagnostic
+          - full
 
 permissions:
   contents: read
@@ -87,9 +95,13 @@ jobs:
           "import('./scripts/win/smoke-guard.mjs').then(m => m.selfTest()).catch(e => { console.error(e.message); process.exit(1); })"
 
       # Offline nonpaid safety + shape tests (no artifact needed, no model calls).
+      # Fail-fast: any failing test file must fail the step (pwsh otherwise keeps
+      # going and only the last command's exit code would count).
       - name: Nonpaid safety + config/presence tests
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           node --test tests/nonpaid/p14b8-ui-smoke-safety.test.mjs
           node --test tests/nonpaid/p14b6-real-smoke-safety.test.mjs
           node --test tests/nonpaid/p14b7-windows-config-sqlite.test.mjs
@@ -155,12 +167,17 @@ jobs:
         shell: pwsh
         run: npm install --no-save playwright@^1.49.0
 
-      # The real UI-driven smoke: drives AI Video.exe through Playwright.
+      # The UI-driven smoke: drives AI Video.exe through Playwright. Default mode
+      # is 'diagnostic' (startup + diagnostics ONLY, no image generation). The
+      # script self-caps at <=9min and force-cleans child processes; the step
+      # timeout is a backstop so a hang never reaches the 90-min job timeout.
       - name: Run UI-driven image-only smoke
+        timeout-minutes: 12
         shell: pwsh
         env:
           REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
           DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
+          UI_SMOKE_MODE: ${{ inputs.mode }}
           AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
           AI_VIDEO_BASE_URL: ${{ secrets.AI_VIDEO_BASE_URL }}
         run: node scripts/win/ui-smoke-image-only.mjs "$env:AI_VIDEO_STAGE_DIR"

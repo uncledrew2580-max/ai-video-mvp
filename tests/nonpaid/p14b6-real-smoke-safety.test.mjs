@@ -6,13 +6,16 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKFLOW = path.join(ROOT, '.github', 'workflows', 'windows-real-smoke-image-only.yml');
 const SMOKE_GUARD = path.join(ROOT, 'scripts', 'win', 'smoke-guard.mjs');
 const SMOKE_SCRIPT = path.join(ROOT, 'scripts', 'win', 'smoke-image-only.mjs');
+// On Windows, dynamic import() of an absolute path (e.g. D:\...) throws
+// ERR_UNSUPPORTED_ESM_URL_SCHEME — it must be a file:// URL.
+const SMOKE_GUARD_URL = pathToFileURL(SMOKE_GUARD).href;
 
 // ── Workflow YAML structure ───────────────────────────────────────────────────
 
@@ -92,7 +95,7 @@ test('smoke-image-only.mjs passes node --check', () => {
 // ── Guard module: scope enforcement ──────────────────────────────────────────
 
 test('assertImageOnlyScope throws when env vars are absent', async () => {
-  const { assertImageOnlyScope } = await import(SMOKE_GUARD);
+  const { assertImageOnlyScope } = await import(SMOKE_GUARD_URL);
   const prevScope = process.env.REAL_SMOKE_SCOPE;
   const prevDis = process.env.DISABLE_VIDEO_GENERATION;
   delete process.env.REAL_SMOKE_SCOPE;
@@ -106,7 +109,7 @@ test('assertImageOnlyScope throws when env vars are absent', async () => {
 });
 
 test('assertImageOnlyScope throws when DISABLE_VIDEO_GENERATION is not true', async () => {
-  const { assertImageOnlyScope } = await import(SMOKE_GUARD);
+  const { assertImageOnlyScope } = await import(SMOKE_GUARD_URL);
   const prevScope = process.env.REAL_SMOKE_SCOPE;
   const prevDis = process.env.DISABLE_VIDEO_GENERATION;
   process.env.REAL_SMOKE_SCOPE = 'image_only';
@@ -122,7 +125,7 @@ test('assertImageOnlyScope throws when DISABLE_VIDEO_GENERATION is not true', as
 });
 
 test('assertImageOnlyScope throws when REAL_SMOKE_SCOPE is not image_only', async () => {
-  const { assertImageOnlyScope } = await import(SMOKE_GUARD);
+  const { assertImageOnlyScope } = await import(SMOKE_GUARD_URL);
   const prevScope = process.env.REAL_SMOKE_SCOPE;
   const prevDis = process.env.DISABLE_VIDEO_GENERATION;
   process.env.REAL_SMOKE_SCOPE = 'full';
@@ -138,7 +141,7 @@ test('assertImageOnlyScope throws when REAL_SMOKE_SCOPE is not image_only', asyn
 });
 
 test('assertImageOnlyScope passes when correctly set', async () => {
-  const { assertImageOnlyScope } = await import(SMOKE_GUARD);
+  const { assertImageOnlyScope } = await import(SMOKE_GUARD_URL);
   const prevScope = process.env.REAL_SMOKE_SCOPE;
   const prevDis = process.env.DISABLE_VIDEO_GENERATION;
   process.env.REAL_SMOKE_SCOPE = 'image_only';
@@ -156,41 +159,41 @@ test('assertImageOnlyScope passes when correctly set', async () => {
 // ── Guard module: forbidden operations throw ──────────────────────────────────
 
 test('guardVeo throws with BLOCKED message', async () => {
-  const { guardVeo } = await import(SMOKE_GUARD);
+  const { guardVeo } = await import(SMOKE_GUARD_URL);
   assert.throws(() => guardVeo(), /BLOCKED/);
   assert.throws(() => guardVeo('Veo'), /BLOCKED.*Veo/);
   assert.throws(() => guardVeo('reviewSubmitVeoV2'), /BLOCKED.*reviewSubmitVeoV2/);
 });
 
 test('guardFinalMerge throws with BLOCKED final-merge message', async () => {
-  const { guardFinalMerge } = await import(SMOKE_GUARD);
+  const { guardFinalMerge } = await import(SMOKE_GUARD_URL);
   assert.throws(() => guardFinalMerge(), /BLOCKED.*final-merge/);
 });
 
 test('guardVideoGeneration throws with BLOCKED video generation message', async () => {
-  const { guardVideoGeneration } = await import(SMOKE_GUARD);
+  const { guardVideoGeneration } = await import(SMOKE_GUARD_URL);
   assert.throws(() => guardVideoGeneration(), /BLOCKED.*video generation/);
 });
 
 test('guardReviewSubmit throws with BLOCKED /review-submit message', async () => {
-  const { guardReviewSubmit } = await import(SMOKE_GUARD);
+  const { guardReviewSubmit } = await import(SMOKE_GUARD_URL);
   assert.throws(() => guardReviewSubmit(), /BLOCKED.*\/review-submit/);
 });
 
 test('guardReviewRerunShot throws with BLOCKED /review-rerun-shot message', async () => {
-  const { guardReviewRerunShot } = await import(SMOKE_GUARD);
+  const { guardReviewRerunShot } = await import(SMOKE_GUARD_URL);
   assert.throws(() => guardReviewRerunShot(), /BLOCKED.*\/review-rerun-shot/);
 });
 
 test('guardReviewSubmitVeoV2 throws with BLOCKED reviewSubmitVeoV2 message', async () => {
-  const { guardReviewSubmitVeoV2 } = await import(SMOKE_GUARD);
+  const { guardReviewSubmitVeoV2 } = await import(SMOKE_GUARD_URL);
   assert.throws(() => guardReviewSubmitVeoV2(), /BLOCKED.*reviewSubmitVeoV2/);
 });
 
 // ── selfTest passes when scope env vars are correctly set ─────────────────────
 
 test('selfTest passes with correct env and confirms all guards throw', async () => {
-  const { selfTest } = await import(SMOKE_GUARD);
+  const { selfTest } = await import(SMOKE_GUARD_URL);
   const prevScope = process.env.REAL_SMOKE_SCOPE;
   const prevDis = process.env.DISABLE_VIDEO_GENERATION;
   process.env.REAL_SMOKE_SCOPE = 'image_only';
@@ -293,6 +296,7 @@ test('smoke-image-only.mjs does not reference final-merge or review-submit route
 // ── checkSmokeSecurityGate (check-smoke-security.mjs) ────────────────────────
 
 const CHECK_SECURITY = path.join(ROOT, 'scripts', 'win', 'check-smoke-security.mjs');
+const CHECK_SECURITY_URL = pathToFileURL(CHECK_SECURITY).href;
 
 test('check-smoke-security.mjs passes node --check', () => {
   assert.ok(fs.existsSync(CHECK_SECURITY), `missing ${CHECK_SECURITY}`);
@@ -302,7 +306,7 @@ test('check-smoke-security.mjs passes node --check', () => {
 });
 
 test('checkSmokeSecurityGate passes when all three conditions are met', async () => {
-  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY_URL);
   const { ok, errors } = checkSmokeSecurityGate({
     REAL_SMOKE_SCOPE: 'image_only',
     DISABLE_VIDEO_GENERATION: 'true',
@@ -313,7 +317,7 @@ test('checkSmokeSecurityGate passes when all three conditions are met', async ()
 });
 
 test('checkSmokeSecurityGate fails when REAL_SMOKE_SCOPE is wrong', async () => {
-  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY_URL);
   const { ok, errors } = checkSmokeSecurityGate({
     REAL_SMOKE_SCOPE: 'full',
     DISABLE_VIDEO_GENERATION: 'true',
@@ -324,7 +328,7 @@ test('checkSmokeSecurityGate fails when REAL_SMOKE_SCOPE is wrong', async () => 
 });
 
 test('checkSmokeSecurityGate fails when REAL_SMOKE_SCOPE is absent', async () => {
-  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY_URL);
   const { ok, errors } = checkSmokeSecurityGate({
     DISABLE_VIDEO_GENERATION: 'true',
     AI_VIDEO_API_KEY: 'dummy-test-key',
@@ -334,7 +338,7 @@ test('checkSmokeSecurityGate fails when REAL_SMOKE_SCOPE is absent', async () =>
 });
 
 test('checkSmokeSecurityGate fails when DISABLE_VIDEO_GENERATION is not true', async () => {
-  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY_URL);
   const { ok, errors } = checkSmokeSecurityGate({
     REAL_SMOKE_SCOPE: 'image_only',
     DISABLE_VIDEO_GENERATION: 'false',
@@ -345,7 +349,7 @@ test('checkSmokeSecurityGate fails when DISABLE_VIDEO_GENERATION is not true', a
 });
 
 test('checkSmokeSecurityGate fails when AI_VIDEO_API_KEY is absent', async () => {
-  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY_URL);
   const { ok, errors } = checkSmokeSecurityGate({
     REAL_SMOKE_SCOPE: 'image_only',
     DISABLE_VIDEO_GENERATION: 'true',
@@ -355,7 +359,7 @@ test('checkSmokeSecurityGate fails when AI_VIDEO_API_KEY is absent', async () =>
 });
 
 test('checkSmokeSecurityGate fails when AI_VIDEO_API_KEY is empty string', async () => {
-  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY_URL);
   const { ok, errors } = checkSmokeSecurityGate({
     REAL_SMOKE_SCOPE: 'image_only',
     DISABLE_VIDEO_GENERATION: 'true',
@@ -366,7 +370,7 @@ test('checkSmokeSecurityGate fails when AI_VIDEO_API_KEY is empty string', async
 });
 
 test('checkSmokeSecurityGate collects all errors when nothing is set', async () => {
-  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY);
+  const { checkSmokeSecurityGate } = await import(CHECK_SECURITY_URL);
   const { ok, errors } = checkSmokeSecurityGate({});
   assert.equal(ok, false);
   assert.ok(errors.length >= 3, `expected at least 3 errors, got ${errors.length}: ${errors}`);

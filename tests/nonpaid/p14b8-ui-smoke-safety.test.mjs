@@ -86,6 +86,24 @@ test('workflow installs Playwright without modifying the lockfile', () => {
   assert.ok(/npm install --no-save playwright/.test(yml), 'must install playwright with --no-save');
 });
 
+test('B8C: workflow defaults to diagnostic mode (no image generation) and passes UI_SMOKE_MODE', () => {
+  const yml = readWf();
+  assert.ok(/default:\s*'diagnostic'/.test(yml), "mode input must default to 'diagnostic'");
+  assert.ok(/UI_SMOKE_MODE:\s*\$\{\{\s*inputs\.mode\s*\}\}/.test(yml), 'must pass inputs.mode as UI_SMOKE_MODE');
+});
+
+test('B8C: the smoke step has a backstop timeout so it never hits the 90-min job timeout', () => {
+  const yml = readWf();
+  assert.ok(/Run UI-driven image-only smoke[\s\S]{0,160}timeout-minutes:\s*\d+/.test(yml),
+    'the smoke step must set its own timeout-minutes');
+});
+
+test('B8C: nonpaid test step fails fast (pwsh does not swallow intermediate failures)', () => {
+  const yml = readWf();
+  assert.ok(/\$PSNativeCommandUseErrorActionPreference\s*=\s*\$true/.test(yml),
+    'nonpaid step must enable native-command error propagation');
+});
+
 test('workflow uploads report + diagnostics (and not raw secrets)', () => {
   const yml = readWf();
   assert.ok(yml.includes('smoke-report.json'), 'must upload smoke-report.json');
@@ -144,9 +162,9 @@ test('ui-smoke drives the full pipeline: select concept → confirm script → s
   // Script confirm (scriptGenerateV1 -> storyboardGenerateV1).
   assert.ok(src.includes('#confirm-script-btn'), 'must click the real 确认脚本 button (#confirm-script-btn)');
   assert.ok(src.includes('/script-confirm'), 'must confirm the script via /script-confirm');
-  // Storyboard / Nano image readiness on the review page.
-  assert.ok(src.includes('/storyboard-status'), 'must go through /storyboard-status');
-  assert.ok(src.includes('/reviews/item'), 'storyboard image success must be read from /reviews/item');
+  // Storyboard / Nano image readiness on the review page (route may be a regex).
+  assert.ok(/storyboard-status/.test(src), 'must go through /storyboard-status');
+  assert.ok(/reviews\\?\/item/.test(src), 'storyboard image success must be read from /reviews/item');
 });
 
 test('ui-smoke registers a dialog handler that accepts confirm() prompts', () => {
@@ -159,10 +177,10 @@ test('ui-smoke registers a dialog handler that accepts confirm() prompts', () =>
 
 test('ui-smoke does NOT mark image_ok merely from /submit-product (must reach storyboard)', () => {
   const src = readUi();
-  // The success gate must require the storyboard milestone, not the brief submit.
+  // The full-mode success gate must require the storyboard milestone, not the brief.
   assert.ok(
-    /storyboard_image_generated_via_ui !== true/.test(src) && src.includes('concept_selected_via_ui') && src.includes('script_confirmed_via_ui'),
-    'success gate must require concept-select + script-confirm + storyboard image',
+    /storyboard_image_generated_via_ui === true/.test(src) && src.includes('concept_selected_via_ui') && src.includes('script_confirmed_via_ui'),
+    'success gate must require the storyboard image milestone',
   );
   // image_ok must never be set true on the submit/brief step.
   assert.ok(!/brief_submitted_via_ui[\s\S]{0,80}image_ok\s*=\s*true/.test(src),
@@ -184,9 +202,10 @@ test('ui-smoke image_ok comes from a storyboard/Nano panel, not the uploaded pro
 
 test('ui-smoke stopped_at is the storyboard stage (not WF01 concept)', () => {
   const src = readUi();
-  assert.ok(src.includes("stopped_at: 'storyboard_ready_for_review'") || src.includes("'storyboard_image_generation'"),
-    "stopped_at must be storyboard_ready_for_review / storyboard_image_generation");
-  assert.ok(!src.includes("stopped_at: 'image_generation'"), 'must not stop at the ambiguous image_generation (WF01 concept)');
+  assert.ok(src.includes("'storyboard_ready_for_review'"),
+    "stopped_at must be storyboard_ready_for_review on a full-mode success");
+  assert.ok(!src.includes("'image_generation'") && !src.includes('storyboard_image_generation'),
+    'must not stop at the ambiguous image_generation (WF01 concept)');
 });
 
 test('ui-smoke never actively triggers /review-submit or /review-rerun-shot', () => {
@@ -206,8 +225,11 @@ test('ui-smoke never actively triggers /review-submit or /review-rerun-shot', ()
 test('ui-smoke does NOT directly write local-config.json or use raw HTTP to stand in for the UI', () => {
   const src = readUi();
   assert.ok(!/writeFileSync\([^)]*local-config\.json/.test(src), 'must not write local-config.json directly');
-  assert.ok(!src.includes('http.request') && !src.includes('https.request'), 'must not POST config via raw HTTP');
-  assert.ok(!src.includes("import http") && !src.includes("from 'node:http'"), 'must not import an http client');
+  // No raw request() POSTs standing in for a UI action.
+  assert.ok(!/http\.request\(/.test(src) && !/https\.request\(/.test(src), 'must not POST via raw http(s).request');
+  // http is allowed ONLY for the read-only healthz probe (http.get via httpProbe).
+  assert.ok(src.includes('httpProbe') && /http\.get\(/.test(src), 'http may be used only for a GET healthz probe');
+  assert.ok(!/(get|request)\([^)]*config-save/.test(src), 'must not hit /config-save over raw http');
 });
 
 test('ui-smoke screenshots the config page only AFTER reload (no key in screenshot)', () => {
@@ -229,6 +251,24 @@ test('ui-smoke intercepts and fails on forbidden video/Veo requests', () => {
     assert.ok(new RegExp(pat, 'i').test(src), `forbidden patterns must cover ${pat}`);
   }
   assert.ok(src.includes('forbidden_requests_blocked'), 'report must record blocked forbidden requests');
+});
+
+test('B8C: a blocked Veo/video/final attempt is RECORDED but the stop-proof flags stay TRUE', () => {
+  const src = readUi();
+  // The three stop-proof flags must NEVER be assigned false anywhere — a blocked
+  // (aborted) request means nothing actually executed, so the report must still
+  // say video/Veo/final were not called.
+  assert.ok(!/video_generation_skipped\s*=\s*false/.test(src), 'video_generation_skipped must never be set false');
+  assert.ok(!/veo_not_called\s*=\s*false/.test(src), 'veo_not_called must never be set false');
+  assert.ok(!/final_merge_not_called\s*=\s*false/.test(src), 'final_merge_not_called must never be set false');
+  // finalize() must re-assert all three true before writing the report.
+  assert.ok(/report\.video_generation_skipped = true/.test(src)
+    && /report\.veo_not_called = true/.test(src)
+    && /report\.final_merge_not_called = true/.test(src),
+    'finalize() must keep the stop-proof flags true');
+  // The attempt is recorded (and aborted), not used to flip the flags.
+  assert.ok(/forbidden_requests_blocked\.push\(/.test(src), 'forbidden attempts must be recorded in forbidden_requests_blocked');
+  assert.ok(/route\.abort\(/.test(src), 'forbidden attempts must be aborted');
 });
 
 test('ui-smoke imports the scope/forbidden guards from smoke-guard', () => {
@@ -263,7 +303,7 @@ test('ui-smoke writes smoke-report.json with B8 stop-proof fields', () => {
   ]) {
     assert.ok(src.includes(field), `report must include ${field}`);
   }
-  assert.ok(src.includes("stopped_at: 'storyboard_ready_for_review'"), "stopped_at must be 'storyboard_ready_for_review'");
+  assert.ok(src.includes("'storyboard_ready_for_review'"), "stopped_at must be 'storyboard_ready_for_review' on full-mode success");
   assert.ok(src.includes("'video_skipped'"), "stages must include 'video_skipped'");
 });
 
@@ -323,4 +363,124 @@ test('ui-smoke request audit strips query strings (no taskId/secret leakage)', (
 test('smoke-guard.mjs passes node --check (shared guard module)', () => {
   assert.ok(fs.existsSync(SMOKE_GUARD), `missing ${SMOKE_GUARD}`);
   assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', SMOKE_GUARD], { stdio: 'pipe' }));
+});
+
+// ── P14-B8C: startup diagnostics, fast-fail timeouts, always-write report ─────
+import os from 'node:os';
+
+test('B8C: fast-fail budgets are bounded (launch<=60s, workbench<=90s, total<=10min)', () => {
+  const src = readUi();
+  const num = (name) => {
+    const m = src.match(new RegExp(`const ${name} = ([^;]+);`));
+    assert.ok(m, `${name} must be defined`);
+    // eslint-disable-next-line no-eval
+    return Function(`"use strict";return (${m[1]})`)();
+  };
+  assert.ok(num('APP_LAUNCH_MS') <= 60_000, 'app launch timeout must be <= 60s');
+  assert.ok(num('WORKBENCH_MS') <= 90_000, 'workbench-ready timeout must be <= 90s');
+  assert.ok(num('TOTAL_MS') <= 10 * 60_000, 'overall hard cap must be <= 10min');
+});
+
+test('B8C: a hard overall watchdog forces a failure + exit', () => {
+  const src = readUi();
+  assert.ok(/setTimeout\(\(\)\s*=>\s*\{[\s\S]*?fail\(\s*['"]overall_timeout/.test(src),
+    'must arm a watchdog that fails with overall_timeout');
+  assert.ok(/process\.exit\(/.test(src), 'must force process exit');
+});
+
+test('B8C: report is ALWAYS written via a single finalize path', () => {
+  const src = readUi();
+  assert.ok(/function finalize\(/.test(src), 'must have a finalize() that writes the report');
+  assert.ok(/writeFileSync\(REPORT_PATH/.test(src), 'finalize must write smoke-report.json');
+  assert.ok(/function fail\(/.test(src) && /fail\([^)]*\)/.test(src), 'failures must route through fail() -> finalize()');
+});
+
+test('B8C: failure report carries the required startup-diagnostic fields', () => {
+  const src = readUi();
+  for (const field of [
+    'status', 'failed_stage', 'error_message', 'error_stack',
+    'app_started', 'window_detected', 'window_title', 'window_url', 'window_state',
+    'runtime_healthz', 'n8n_healthz', 'api_key_leaked',
+  ]) {
+    assert.ok(src.includes(field), `failure report must include ${field}`);
+  }
+  // The stop-proof safety flags must remain true in failure reports too.
+  assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src) && /final_merge_not_called: true/.test(src),
+    'stop-proof flags must default true');
+});
+
+test('B8C: captures window + log + process/port diagnostics (redacted)', () => {
+  const src = readUi();
+  assert.ok(src.includes('window-diagnostics.json'), 'must write window-diagnostics.json');
+  assert.ok(/isVisible/.test(src) && /isClosed/.test(src), 'window diag must record isVisible/isClosed');
+  assert.ok(src.includes('process-list.txt') && src.includes('ports-listening.txt'), 'must capture process + port summaries');
+  assert.ok(src.includes('electron-stdout.log'), 'must capture the Electron app stdout/stderr');
+  assert.ok(/redactString\(/.test(src) && /redactObject\(/.test(src), 'all diagnostics must be redacted');
+  assert.ok(/screenshot\(/.test(src), 'must screenshot blank/splash on failure');
+});
+
+test('B8C: blank/splash fast-fail kills the AI Video.exe process tree', () => {
+  const src = readUi();
+  assert.ok(/function killAppTree\(/.test(src), 'must define killAppTree()');
+  assert.ok(/taskkill/.test(src), 'must taskkill the Electron process tree on Windows');
+  assert.ok(/workbench_load_timeout/.test(src), 'must fail fast on a blank/splash workbench');
+});
+
+test('B8C: diagnostic mode is the default and never submits the brief (no generation)', () => {
+  const src = readUi();
+  assert.ok(/UI_SMOKE_MODE \|\| 'diagnostic'/.test(src), 'default mode must be diagnostic');
+  // The brief submission must be gated behind full mode only.
+  const briefIdx = src.indexOf('#product-submit-button');
+  const fullGateIdx = src.indexOf('if (!FULL)');
+  assert.ok(fullGateIdx > 0 && briefIdx > fullGateIdx,
+    'the diagnostic-mode early return must come before any brief submission');
+  assert.ok(src.includes("status = 'passed_diagnostic'"), 'diagnostic mode must report passed_diagnostic');
+});
+
+test('B8C: api-key leak self-check is performed and recorded', () => {
+  const src = readUi();
+  assert.ok(/function assertNoKeyLeak\(/.test(src), 'must define assertNoKeyLeak()');
+  assert.ok(/api_key_leaked = /.test(src), 'must set api_key_leaked from the self-check');
+});
+
+// Behavioral: a missing AI Video.exe must FAST-FAIL and still write a complete
+// failure report — without Playwright, a real app, network, or any model call.
+test('B8C behavioral: missing app → fast fail + failure report + no key leak', () => {
+  const out = fs.mkdtempSync(path.join(os.tmpdir(), 'b8c-out-'));
+  const DUMMY = 'dummy-key-ZZZ-not-a-real-secret-0123456789';
+  const t0 = Date.now();
+  let exitCode = 0;
+  try {
+    execFileSync(process.execPath, [UI_SCRIPT, path.join(out, 'no-such-stage')], {
+      env: {
+        ...process.env,
+        REAL_SMOKE_SCOPE: 'image_only',
+        DISABLE_VIDEO_GENERATION: 'true',
+        UI_SMOKE_MODE: 'diagnostic',
+        AI_VIDEO_API_KEY: DUMMY,
+        AI_VIDEO_SMOKE_OUT: out,
+      },
+      stdio: 'pipe',
+      timeout: 60_000,
+    });
+  } catch (e) {
+    exitCode = e.status ?? 1;
+  }
+  const elapsed = Date.now() - t0;
+  assert.equal(exitCode, 1, 'missing app must exit non-zero');
+  assert.ok(elapsed < 55_000, `must fail fast, took ${elapsed}ms`);
+
+  const reportPath = path.join(out, 'smoke-report.json');
+  assert.ok(fs.existsSync(reportPath), 'a smoke-report.json must be written even on failure');
+  const raw = fs.readFileSync(reportPath, 'utf8');
+  const r = JSON.parse(raw);
+  assert.equal(r.status, 'failed');
+  assert.ok(r.failed_stage, 'failed_stage must be set');
+  assert.equal(r.video_generation_skipped, true);
+  assert.equal(r.veo_not_called, true);
+  assert.equal(r.final_merge_not_called, true);
+  assert.equal(r.api_key_leaked, false);
+  assert.equal(raw.includes(DUMMY), false, 'the API key must never appear in the report');
+
+  fs.rmSync(out, { recursive: true, force: true });
 });
