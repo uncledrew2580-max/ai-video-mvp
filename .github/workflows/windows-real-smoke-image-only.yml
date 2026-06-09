@@ -138,12 +138,22 @@ jobs:
             Write-Error "Download reported success but '$targetDir' is missing."
             exit 1
           }
-          $exePath = Join-Path $targetDir 'AI Video.exe'
-          if (-not (Test-Path $exePath)) {
-            Write-Error "'AI Video.exe' not found at '$exePath' — artifact may be incomplete or wrong run ID."
+
+          # upload-artifact may preserve a nested directory layer depending on
+          # how the B5 build staged paths. Locate exactly one 'AI Video.exe'
+          # anywhere under $targetDir and use its parent as the real stage root.
+          $exeFiles = Get-ChildItem -Path $targetDir -Filter 'AI Video.exe' -Recurse -File
+          if ($exeFiles.Count -eq 0) {
+            Write-Error "'AI Video.exe' not found anywhere under '$targetDir' — artifact may be incomplete or wrong run ID."
             exit 1
           }
-          Write-Host "Artifact ready: $targetDir (AI Video.exe present)"
+          if ($exeFiles.Count -gt 1) {
+            Write-Error "Found $($exeFiles.Count) copies of 'AI Video.exe' under '$targetDir': $($exeFiles.FullName -join ', ')"
+            exit 1
+          }
+          $stageDir = $exeFiles[0].DirectoryName
+          Write-Host "Stage dir resolved: $stageDir  (AI Video.exe present)"
+          "AI_VIDEO_STAGE_DIR=$stageDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       # Real smoke: scope guard and selfTest run at startup, then ONE image task
       # is submitted and polled until result. Stops after image — no Veo/video/merge.
@@ -155,7 +165,7 @@ jobs:
           AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
           AI_VIDEO_BASE_URL: ${{ secrets.AI_VIDEO_BASE_URL }}
           AI_VIDEO_IMAGE_MODEL: ${{ inputs.image_model }}
-        run: node scripts/win/smoke-image-only.mjs
+        run: node scripts/win/smoke-image-only.mjs "$env:AI_VIDEO_STAGE_DIR"
 
       - name: Upload smoke report
         if: always()
