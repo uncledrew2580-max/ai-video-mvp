@@ -18,6 +18,7 @@ on:
       - 'tests/nonpaid/p14-windows-output-dirs.test.mjs'
       - 'tests/nonpaid/p14-windows-desktop-shell.test.mjs'
       - 'tests/nonpaid/p14b7-windows-config-sqlite.test.mjs'
+      - 'tests/nonpaid/p14b8g-workflow-sync-fk.test.mjs'
       - 'lib/sqlite-exec.mjs'
       - 'client/launcher.mjs'
       - '版本测试/serve-review-assets.mjs'
@@ -118,6 +119,15 @@ jobs:
       - name: Windows nonpaid tests (P14-B7 config path + node:sqlite presence + lifecycle)
         shell: pwsh
         run: node --test tests/nonpaid/p14b7-windows-config-sqlite.test.mjs
+
+      # P14-B8G: FK-safe workflow sync order — reproduces the B8F failure where
+      # activeVersionId / publishedVersionId were set before the workflow_history row
+      # existed, violating the FK constraint enforced by node:sqlite on win32.
+      # Verifies the fix end-to-end via the real sync subprocess on a synthetic n8n-2.x
+      # schema. Runs on Windows so node:sqlite (built-in since Node 24) is live.
+      - name: Windows nonpaid tests (P14-B8G FK-safe workflow sync)
+        shell: pwsh
+        run: node --test tests/nonpaid/p14b8g-workflow-sync-fk.test.mjs
 
       # P14-B5: Build the Electron win32-x64 desktop shell from the freshly
       # installed node_modules/electron/dist on this Windows runner.
