@@ -268,6 +268,13 @@ test('smoke-image-only.mjs stages array includes video_skipped entry', () => {
   assert.ok(src.includes("'video_skipped'"), "stages must include 'video_skipped' to prove video was not reached");
 });
 
+test('smoke-image-only.mjs uses an enum resolution (not pixel dimensions)', () => {
+  const src = fs.readFileSync(SMOKE_SCRIPT, 'utf8');
+  assert.ok(!src.includes('720x1280'), "must not use pixel-dimension resolution '720x1280' — Kie API rejects it");
+  assert.ok(!src.includes('1080x1920'), "must not use pixel-dimension resolution '1080x1920' — Kie API rejects it");
+  assert.ok(src.includes("resolution: '2K'"), "must use enum resolution '2K' to match Kie API allowed options");
+});
+
 test('smoke-image-only.mjs does not reference Veo video endpoint', () => {
   const src = fs.readFileSync(SMOKE_SCRIPT, 'utf8');
   assert.ok(!src.includes('/v1/veo'), 'must not reference /v1/veo');

@@ -282,8 +282,8 @@ async function main() {
       input: {
         prompt: 'Smoke test image: a white circle on a solid blue background, 9:16 aspect ratio.',
         aspect_ratio: '9:16',
-        resolution: '720x1280',
-        output_format: 'jpeg',
+        resolution: '2K',
+        output_format: 'png',
       },
     };
 
