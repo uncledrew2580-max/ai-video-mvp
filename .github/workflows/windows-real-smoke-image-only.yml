@@ -109,18 +109,19 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $artifactName = 'AI-Video-Win-x64-Portable-RC-0001'
-          $runId       = '${{ inputs.artifact_run_id }}'
-          $outDir      = 'dist-win'
-          $maxAttempts = 5
-          $succeeded   = $false
+          $runId        = '${{ inputs.artifact_run_id }}'
+          $outDir       = 'dist-win'
+          # gh run download --dir extracts contents directly into the target dir,
+          # so pass the full expected path so smoke-image-only.mjs finds it there.
+          $targetDir    = Join-Path $outDir $artifactName
+          $maxAttempts  = 5
+          $succeeded    = $false
 
           for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
-            Write-Host "[$attempt/$maxAttempts] Downloading '$artifactName' from run $runId ..."
+            Write-Host "[$attempt/$maxAttempts] Downloading '$artifactName' from run $runId -> $targetDir ..."
             # Remove any partial output from a previous attempt before retrying.
-            if (Test-Path "$outDir/$artifactName") {
-              Remove-Item "$outDir/$artifactName" -Recurse -Force
-            }
-            gh run download $runId --name $artifactName --dir $outDir
+            if (Test-Path $targetDir) { Remove-Item $targetDir -Recurse -Force }
+            gh run download $runId --name $artifactName --dir $targetDir
             if ($LASTEXITCODE -eq 0) { $succeeded = $true; break }
             if ($attempt -lt $maxAttempts) {
               $backoff = [math]::Min(60 * $attempt, 300)
@@ -133,11 +134,16 @@ jobs:
             Write-Error "Artifact download failed after $maxAttempts attempts."
             exit 1
           }
-          if (-not (Test-Path "$outDir/$artifactName")) {
-            Write-Error "Download succeeded but '$outDir/$artifactName' is missing."
+          if (-not (Test-Path $targetDir)) {
+            Write-Error "Download reported success but '$targetDir' is missing."
             exit 1
           }
-          Write-Host "Artifact ready: $outDir/$artifactName"
+          $exePath = Join-Path $targetDir 'AI Video.exe'
+          if (-not (Test-Path $exePath)) {
+            Write-Error "'AI Video.exe' not found at '$exePath' — artifact may be incomplete or wrong run ID."
+            exit 1
+          }
+          Write-Host "Artifact ready: $targetDir (AI Video.exe present)"
 
       # Real smoke: scope guard and selfTest run at startup, then ONE image task
       # is submitted and polled until result. Stops after image — no Veo/video/merge.
