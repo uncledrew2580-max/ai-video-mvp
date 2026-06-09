@@ -17,6 +17,12 @@ on:
       - 'tests/nonpaid/p14-windows-config-init.test.mjs'
       - 'tests/nonpaid/p14-windows-output-dirs.test.mjs'
       - 'tests/nonpaid/p14-windows-desktop-shell.test.mjs'
+      - 'tests/nonpaid/p14b7-windows-config-sqlite.test.mjs'
+      - 'lib/sqlite-exec.mjs'
+      - 'client/launcher.mjs'
+      - '版本测试/serve-review-assets.mjs'
+      - 'scripts/bootstrap-ai-video-workflows.mjs'
+      - 'sync_iteration_v1_workflows_to_db.mjs'
 
 permissions:
   contents: read
@@ -105,6 +111,13 @@ jobs:
         run: |
           node --test tests/nonpaid/p14-windows-config-init.test.mjs
           node --test tests/nonpaid/p14-windows-output-dirs.test.mjs
+
+      # P14-B7: AppData config-path consistency + node:sqlite workflow presence
+      # (WF01/WF02/WF02a/WF02b/WF03 with no system sqlite3) + lifecycle/PID path.
+      # Runs on a real Windows runner so node:sqlite is exercised on win32.
+      - name: Windows nonpaid tests (P14-B7 config path + node:sqlite presence + lifecycle)
+        shell: pwsh
+        run: node --test tests/nonpaid/p14b7-windows-config-sqlite.test.mjs
 
       # P14-B5: Build the Electron win32-x64 desktop shell from the freshly
       # installed node_modules/electron/dist on this Windows runner.
