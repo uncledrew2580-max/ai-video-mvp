@@ -484,3 +484,72 @@ test('B8C behavioral: missing app → fast fail + failure report + no key leak',
 
   fs.rmSync(out, { recursive: true, force: true });
 });
+
+// ── P14-B8I: API-key save/reload closure + brief-form selector hardening ──────
+
+test('B8I: report distinguishes UI-configured from actual config persistence', () => {
+  const src = readUi();
+  for (const f of ['configured_reported_by_ui', 'api_key_saved_via_ui', 'api_key_loaded_from_config', 'api_key_effective_for_runtime', 'config_save_mismatch']) {
+    assert.ok(src.includes(f), `report must include ${f}`);
+  }
+});
+
+test('B8I: config save is verified by config-file readback + runtime /health/meta (not route-only)', () => {
+  const src = readUi();
+  assert.ok(/function configKeyPresent\(/.test(src), 'must read the saved key presence from local-config.json');
+  assert.ok(/local-config\.json/.test(src) && /providers\?\.\s*kie\?\.\s*api_key|providers\?\.kie\?\.api_key/.test(src),
+    'must check providers.kie.api_key presence');
+  assert.ok(/\/health\/meta/.test(src) && /kie_api_key_configured/.test(src), 'must verify runtime effectiveness via /health/meta');
+  assert.ok(/api_key_loaded_from_config = configKeyPresent\(\)/.test(src), 'api_key_loaded_from_config from the file readback');
+});
+
+test('B8I: a configured-vs-actual mismatch fails the run', () => {
+  const src = readUi();
+  assert.ok(/config_save_mismatch = true/.test(src) || /report\.config_save_mismatch = true/.test(src), 'must set config_save_mismatch');
+  assert.ok(/fail\('config_save_mismatch'/.test(src), 'must fail on config_save_mismatch');
+  assert.ok(/fail\('config_save_not_effective'/.test(src), 'diagnostic mode must fail if the key is not effective');
+});
+
+test('B8I: config-file readback records PRESENCE only — never the key value', () => {
+  const src = readUi();
+  // configKeyPresent must return a boolean (.trim().length > 0), not store the key.
+  assert.ok(/return typeof k === 'string' && k\.trim\(\)\.length > 0/.test(src), 'configKeyPresent must return a boolean presence');
+  assert.ok(!/report\.[A-Za-z_]+\s*=\s*k\b/.test(src), 'the raw key must never be assigned to a report field');
+});
+
+test('B8I: brief form is reached via /new-project and does NOT hard-wait field-0 on /', () => {
+  const src = readUi();
+  assert.ok(/\$\{uiBase\}\/new-project/.test(src), 'must navigate to /new-project for the intake form');
+  // The old hard-wait `page.locator('input[name="field-0"]').fill(...)` must be gone.
+  assert.ok(!/page\.locator\('input\[name="field-0"\]'\)\.fill\(/.test(src), 'must not hard-wait field-0 directly');
+  // The brief goto immediately before the form fill must be /new-project, not the hub /.
+  assert.ok(!/goto\(`\$\{uiBase\}\/`, \{ waitUntil: 'domcontentloaded' \}\);\s*\n\s*await page\.locator\('input\[name="field-0"\]'\)/.test(src),
+    'must not fill field-0 right after navigating to the hub /');
+});
+
+test('B8I: brief form uses resilient selectors (name + placeholder/label fallbacks)', () => {
+  const src = readUi();
+  assert.ok(/function firstLocator\(/.test(src), 'must provide a resilient firstLocator helper');
+  assert.ok(/#product-intake-form/.test(src) && /form\[action="\/submit-product"\]/.test(src), 'must wait for the stable intake form');
+  assert.ok(/placeholder\*="补光灯"|placeholder\*="宠物梳"/.test(src), 'product-name locator must have a placeholder fallback');
+  assert.ok(/#product-submit-button/.test(src), 'submit must use the stable button id');
+});
+
+test('B8I: a missing brief form emits a DOM summary + screenshot and fails brief_form_missing', () => {
+  const src = readUi();
+  assert.ok(/function captureDomSummary\(/.test(src), 'must have a DOM-summary helper');
+  assert.ok(/captureDomSummary\(page, 'new-project-dom-summary\.json'\)/.test(src), 'must snapshot the new-project page');
+  assert.ok(/brief-form-missing-dom-summary\.json/.test(src), 'must dump a DOM summary when the form is missing');
+  assert.ok(/fail\('brief_form_missing'/.test(src), 'must fail with brief_form_missing');
+  assert.ok(/04b-brief-form-missing\.png/.test(src), 'must screenshot the missing-form page');
+  // DOM summary records url/title/buttons/inputs.
+  assert.ok(/buttons:/.test(src) && /inputs:/.test(src) && /headings:/.test(src), 'DOM summary must include buttons/inputs/headings');
+});
+
+test('B8I: the brief still completes the full image-only flow (name/desc/market/lang/image/submit)', () => {
+  const src = readUi();
+  assert.ok(/nameInput\.fill\(/.test(src), 'fills product name');
+  assert.ok(/descInput.*\.fill\(|textarea\[name="field-1"\]/.test(src), 'fills description/selling points');
+  assert.ok(/field-2/.test(src) && /field-3/.test(src), 'sets market + language');
+  assert.ok(/setInputFiles\(/.test(src), 'uploads a test image');
+});

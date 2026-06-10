@@ -126,8 +126,12 @@ const report = {
   sqlite_foreign_key_check: null,
   // config / presence milestones (best-effort, no generation)
   api_key_provided: false,
-  api_key_saved_via_ui: false,
-  configured_reported_by_ui: false,
+  api_key_saved_via_ui: false,          // UI /config-save returned 200
+  configured_reported_by_ui: false,     // UI 已配置 badge after reload
+  api_key_loaded_from_config: false,    // local-config.json actually holds a key (masked)
+  api_key_effective_for_runtime: false, // server /health/meta reports kie_api_key_configured
+  config_save_mismatch: false,          // UI says configured but the config is not saved
+  brief_form_found: false,              // the /new-project intake form was located
   output_dir: null,
   output_dir_confirmed: false,
   workflow_presence: { WF01: false, WF02: false, WF02a: false, WF02b: false, WF03: false },
@@ -201,9 +205,70 @@ function httpProbe(urlStr, timeoutMs = 3000) {
   });
 }
 
+// GET JSON (for /health/meta). Returns parsed object or null. Never logs bodies.
+function httpGetJson(urlStr, timeoutMs = 4000) {
+  return new Promise((resolve) => {
+    try {
+      const req = http.get(urlStr, { timeout: timeoutMs }, (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch { resolve(null); } });
+      });
+      req.on('error', () => resolve(null));
+      req.on('timeout', () => { req.destroy(); resolve(null); });
+    } catch { resolve(null); }
+  });
+}
+
+// Read-only presence check of the effective config's API key. Returns a BOOLEAN
+// only — the key value is never read into the report, logged, or uploaded.
+function configKeyPresent() {
+  try {
+    const cfgPath = path.join(userSupportDir(), 'config', 'local-config.json');
+    if (!fs.existsSync(cfgPath)) return false;
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    const k = (cfg?.providers?.kie?.api_key || cfg?.kie?.api_key || '');
+    return typeof k === 'string' && k.trim().length > 0;
+  } catch { return false; }
+}
+
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 async function screenshot(page, name) {
   try { await page.screenshot({ path: path.join(SHOTS_DIR, name), fullPage: true }); } catch {}
+}
+
+// Snapshot the current page (url/title/visible buttons+inputs/short DOM text) so a
+// missing form is debuggable without secrets. Writes to smoke-diagnostics.
+async function captureDomSummary(page, name) {
+  let summary = { url: null, title: null, buttons: [], inputs: [], headings: [] };
+  try {
+    summary.url = page.url();
+    summary.title = await page.title().catch(() => null);
+    summary = await page.evaluate((base) => {
+      const txt = (el) => (el.innerText || el.textContent || '').trim().slice(0, 60);
+      const out = { ...base };
+      out.buttons = Array.from(document.querySelectorAll('button, a.btn, [role="button"]')).map(txt).filter(Boolean).slice(0, 25);
+      out.inputs = Array.from(document.querySelectorAll('input, textarea, select')).map((el) => ({
+        tag: el.tagName.toLowerCase(), type: el.getAttribute('type') || '', name: el.getAttribute('name') || '',
+        placeholder: el.getAttribute('placeholder') || '', id: el.id || '',
+      })).slice(0, 30);
+      out.headings = Array.from(document.querySelectorAll('h1, h2, .form-section-title, .premium-label')).map(txt).filter(Boolean).slice(0, 20);
+      return out;
+    }, { url: summary.url, title: summary.title }).catch(() => summary);
+  } catch {}
+  try { fs.writeFileSync(path.join(DIAG_DIR, name), JSON.stringify(summary, null, 2)); } catch {}
+  return summary;
+}
+
+// Resilient locator: first selector that resolves to a present element, else null.
+async function firstLocator(page, selectors) {
+  for (const sel of selectors) {
+    try {
+      const loc = page.locator(sel).first();
+      if ((await loc.count()) > 0) return loc;
+    } catch {}
+  }
+  return null;
 }
 
 // Capture every window's url/title/visibility — and the main window state.
@@ -503,11 +568,19 @@ async function main() {
   await screenshot(page, '01-workbench.png');
 
   try {
-    // ── Config: save the API Key through the UI (no model call) ───────────────
+    // ── Config: save the API Key through the UI, then VERIFY the closure ───────
     if (apiKey) {
       await page.goto(`${uiBase}/config`, { waitUntil: 'domcontentloaded' });
-      const keyInput = page.locator('input[data-path="providers.kie.api_key"]');
-      await keyInput.waitFor({ state: 'visible', timeout: 30000 });
+      const keyInput = await firstLocator(page, [
+        'input[data-path="providers.kie.api_key"]',
+        'input[type="password"]',
+      ]);
+      if (!keyInput) {
+        await captureDomSummary(page, 'config-dom-summary.json');
+        fail('config_input_missing', new Error('API Key input not found on /config'), apiKey);
+        return;
+      }
+      await keyInput.waitFor({ state: 'visible', timeout: 20000 });
       await keyInput.fill(apiKey); // typed into a type=password field; never logged
       const saveResp = page.waitForResponse((r) => r.url().includes('/config-save') && r.request().method() === 'POST', { timeout: 30000 });
       await page.locator('#save-btn').click();
@@ -521,8 +594,25 @@ async function main() {
       report.configured_reported_by_ui = /已配置/.test(cfgText);
       report.output_dir = await page.locator('#output-base-display').first().innerText().catch(() => null);
       report.output_dir_confirmed = Boolean(report.output_dir && report.output_dir.trim());
-      report.stages.push('configured_verified_via_ui');
       await screenshot(page, '02-config-configured.png');
+
+      // B8I closure: a 已配置 badge is NOT enough — verify the key actually
+      // persisted to local-config.json (presence only, never the value) AND is
+      // effective for the runtime (server /health/meta).
+      report.api_key_loaded_from_config = configKeyPresent();
+      const meta = await httpGetJson(`http://127.0.0.1:${UI_PORT}/health/meta`);
+      report.api_key_effective_for_runtime = Boolean(meta && meta.kie_api_key_configured);
+      report.stages.push('configured_verified_via_ui');
+
+      // Mismatch: UI claims configured but the save did not actually take.
+      if (report.configured_reported_by_ui && !(report.api_key_loaded_from_config && report.api_key_effective_for_runtime)) {
+        report.config_save_mismatch = true;
+        fail('config_save_mismatch', new Error(
+          `UI reported 已配置 but config not effective ` +
+          `(loaded_from_config=${report.api_key_loaded_from_config}, effective=${report.api_key_effective_for_runtime})`,
+        ), apiKey);
+        return;
+      }
     }
 
     // ── Workflow presence from /system (read-only) ────────────────────────────
@@ -538,6 +628,15 @@ async function main() {
 
     if (!FULL) {
       // Diagnostic mode STOPS here — no brief, no concept, no model/image generation.
+      // But the API-key save closure must hold when a key was provided (a route/UI
+      // "configured" is not sufficient — the key must persist + be runtime-effective).
+      if (apiKey && !(report.api_key_loaded_from_config && report.api_key_effective_for_runtime)) {
+        fail('config_save_not_effective', new Error(
+          `API key not effective after UI save ` +
+          `(loaded_from_config=${report.api_key_loaded_from_config}, effective=${report.api_key_effective_for_runtime})`,
+        ), apiKey);
+        return;
+      }
       report.status = 'passed_diagnostic';
       report.stopped_at = 'diagnostic_no_generation';
       console.log('[ui-smoke] diagnostic mode complete (no generation).');
@@ -546,12 +645,54 @@ async function main() {
     }
 
     // ── FULL mode only: complete image-only pipeline → Nano storyboard image ───
-    await page.goto(`${uiBase}/`, { waitUntil: 'domcontentloaded' });
-    await page.locator('input[name="field-0"]').fill('Smoke Test Product — white circle on blue');
+    // The creative-brief intake form lives at /new-project (the / route is a hub
+    // dashboard). Navigate there explicitly; do NOT hard-wait field-0 on the hub.
+    await page.goto(`${uiBase}/new-project`, { waitUntil: 'domcontentloaded' });
+    // Record what the page actually shows BEFORE touching selectors.
+    await captureDomSummary(page, 'new-project-dom-summary.json');
+    await screenshot(page, '04a-new-project.png');
+
+    // Wait for the intake form itself (stable id), not a single field.
+    const briefForm = await firstLocator(page, ['#product-intake-form', 'form[action="/submit-product"]']);
+    if (briefForm) { await briefForm.waitFor({ state: 'visible', timeout: 20000 }).catch(() => {}); }
+
+    // Resilient product-name locator: stable field name first, then label/placeholder.
+    const nameInput = await firstLocator(page, [
+      'input[name="field-0"]',
+      'input[placeholder*="补光灯"]',
+      'input[placeholder*="宠物梳"]',
+    ]);
+    if (!nameInput) {
+      report.brief_form_found = false;
+      await captureDomSummary(page, 'brief-form-missing-dom-summary.json');
+      await screenshot(page, '04b-brief-form-missing.png');
+      fail('brief_form_missing', new Error('creative-brief intake form / product-name field not found on /new-project'), apiKey);
+      return;
+    }
+    report.brief_form_found = true;
+
+    // Product name (required); description / selling points (optional); market +
+    // language already default to "United States" / "English" — set them anyway
+    // so the brief is explicit; then upload a test image.
+    await nameInput.fill('Smoke Test Product — white circle on blue');
+    const descInput = await firstLocator(page, ['textarea[name="field-1"]', 'textarea']);
+    if (descInput) await descInput.fill('Image-only smoke: simple white circle on a solid blue background.').catch(() => {});
+    const marketInput = await firstLocator(page, ['input[name="field-2"]']);
+    if (marketInput) await marketInput.fill('United States').catch(() => {});
+    const langInput = await firstLocator(page, ['input[name="field-3"]']);
+    if (langInput) await langInput.fill('English').catch(() => {});
     const samplePng = path.join(os.tmpdir(), `ui-smoke-product-${Date.now()}.png`);
     fs.writeFileSync(samplePng, makeSolidPng(256, 256, [60, 120, 220]));
-    await page.locator('input[name="field-5"]').setInputFiles(samplePng);
-    await page.locator('#product-submit-button').click();
+    const fileInput = await firstLocator(page, ['input[type="file"][name="field-5"]', 'input[type="file"]']);
+    if (!fileInput) {
+      await captureDomSummary(page, 'brief-form-no-file-input.json');
+      fail('brief_form_missing', new Error('product image file input not found on /new-project'), apiKey);
+      return;
+    }
+    await fileInput.setInputFiles(samplePng);
+    await screenshot(page, '04c-brief-filled.png');
+    const submitBtn = await firstLocator(page, ['#product-submit-button', 'button[type="submit"]']);
+    await (submitBtn || page.locator('#product-submit-button')).click();
     await page.waitForURL(/\/submitted/, { timeout: 60000 }).catch(() => {});
     let since = '0';
     try { since = new URL(page.url()).searchParams.get('since') || '0'; } catch {}
