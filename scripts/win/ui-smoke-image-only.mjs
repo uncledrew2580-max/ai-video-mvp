@@ -46,6 +46,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { redactObject, redactString } from '../../app-server/shared/redact.mjs';
 import { runSqlite } from '../../lib/sqlite-exec.mjs';
+import { n8nDbReadinessReport } from './n8n-db-ready.mjs';
 
 // Expose guard stubs so they are importable; calling them intentionally blocks the op.
 export { guardFinalMerge, guardReviewRerunShot, guardReviewSubmit, guardReviewSubmitVeoV2, guardVeo, guardVideoGeneration };
@@ -124,6 +125,10 @@ const report = {
   sync_stage: null,
   workflow_ids_checked: [],
   sqlite_foreign_key_check: null,
+  // B8K: n8n migration-readiness diagnostics (bootstrap ran before the schema was
+  // complete — e.g. "no such table: workflow_published_version").
+  n8n_migration_readiness_failed: false,
+  db_readiness: null, // { healthz_ready, db_file_exists, schema_ready, missing_tables, migration_log_state, waited_ms }
   // config / presence milestones (best-effort, no generation)
   api_key_provided: false,
   api_key_saved_via_ui: false,          // UI /config-save returned 200
@@ -533,15 +538,36 @@ async function main() {
       : `window stuck at state=${report.window_state} (runtime=${report.runtime_healthz}, n8n=${report.n8n_healthz})`;
     try { report.launcher_tail = redactString(electronOut.buf.split('\n').filter(Boolean).slice(-8).join('\n')); } catch {}
 
-    // B8G: if the launcher aborted because workflow SYNC failed (e.g. an FK error),
-    // surface it as failed_stage=workflow_sync with the live foreign_key_check.
-    if (/工作流(版本)?同步失败|workflow[_ ]?sync|FOREIGN KEY/i.test(electronOut.buf)) {
+    // Classify WHY the workbench never started. Order matters: a missing table /
+    // readiness timeout is a SCHEMA readiness problem (B8K), NOT a sync FK problem.
+    const dbPath = path.join(userSupportDir(), 'workflow-data', '.n8n', 'database.sqlite');
+    const n8nLogPath = path.join(userSupportDir(), 'logs', 'launcher', 'n8n.log');
+    // Prefer the launcher's own structured [db-readiness] line; else recompute.
+    const parsedReadiness = (() => {
+      const m = electronOut.buf.match(/\[db-readiness\]\s*(\{[^\n]*\})/);
+      if (m) { try { return JSON.parse(m[1]); } catch {} }
+      return null;
+    })();
+    try {
+      report.db_readiness = parsedReadiness || {
+        healthz_ready: /n8n 就绪/.test(electronOut.buf) || report.n8n_healthz === 'HTTP 200',
+        ...n8nDbReadinessReport(dbPath, { logPath: n8nLogPath }),
+      };
+    } catch (e) { report.db_readiness = { error: e.message }; }
+
+    if (/no such table|n8n 数据库初始化未完成|database schema is not ready/i.test(electronOut.buf)) {
+      // B8K: bootstrap ran before the schema was complete (e.g. workflow_published_version).
+      report.n8n_migration_readiness_failed = true;
+      report.failed_stage = 'n8n_migration_readiness';
+      const m = electronOut.buf.match(/no such table:\s*([A-Za-z0-9_]+)/i);
+      if (m && report.db_readiness && typeof report.db_readiness === 'object') report.db_readiness.error_missing_table = m[1];
+    } else if (/工作流(版本)?同步失败|FOREIGN KEY/i.test(electronOut.buf)) {
+      // B8G: schema WAS ready but the workflow version SYNC failed (e.g. an FK error).
       report.workflow_sync_failed = true;
       report.failed_stage = 'workflow_sync';
       report.sync_stage = 'workflow_sync';
       report.workflow_ids_checked = ['rKHHjD2QBlL6EhaM', 'conceptSelectStoryboardV1', 'scriptGenerateV1', 'storyboardGenerateV1', 'reviewSubmitVeoV2'];
       try {
-        const dbPath = path.join(userSupportDir(), 'workflow-data', '.n8n', 'database.sqlite');
         if (fs.existsSync(dbPath)) {
           const raw = runSqlite(['-json', dbPath, 'PRAGMA foreign_key_check;'], { encoding: 'utf8' });
           report.sqlite_foreign_key_check = raw ? JSON.parse(raw) : [];

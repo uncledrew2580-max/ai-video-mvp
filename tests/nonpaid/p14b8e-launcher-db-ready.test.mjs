@@ -12,6 +12,9 @@ import { test } from 'node:test';
 import {
   REQUIRED_SCHEMA_TABLES,
   n8nDbSchemaReady,
+  missingSchemaTables,
+  migrationLogState,
+  n8nDbReadinessReport,
   waitForN8nDbSchemaReady,
   workflowPresence,
 } from '../../scripts/win/n8n-db-ready.mjs';
@@ -184,4 +187,112 @@ test('B8E behavioral: missing app → report has no-window fields + no key leak'
   assert.equal(r.api_key_leaked, false);
   assert.equal(raw.includes(DUMMY), false, 'the API key must never appear in the report');
   fs.rmSync(out, { recursive: true, force: true });
+});
+
+// ── P14-B8K: readiness must cover the FULL schema (workflow_published_version) ──
+
+test('B8K: REQUIRED_SCHEMA_TABLES covers every table bootstrap/sync touch', () => {
+  for (const t of ['workflow_entity', 'workflow_history', 'workflow_published_version', 'shared_workflow', 'project']) {
+    assert.ok(REQUIRED_SCHEMA_TABLES.includes(t), `REQUIRED_SCHEMA_TABLES must include ${t}`);
+  }
+});
+
+test('B8K: /healthz ready but workflow_published_version missing → NOT ready (no bootstrap)', { skip: !DatabaseSync }, () => {
+  const { dir, db } = tmpDb();
+  try {
+    // The B8J state: the 3 old tables exist but the later-migration tables do not.
+    createSchema(db, ['workflow_entity', 'workflow_history', 'project']);
+    assert.equal(n8nDbSchemaReady(db), false, 'must not be ready while workflow_published_version is missing');
+    const missing = missingSchemaTables(db);
+    assert.ok(missing.includes('workflow_published_version'), 'missing must list workflow_published_version');
+    assert.ok(missing.includes('shared_workflow'), 'missing must list shared_workflow');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('B8K: waits (does not fail) until workflow_published_version appears mid-migration', { skip: !DatabaseSync }, async () => {
+  const { dir, db } = tmpDb();
+  try {
+    createSchema(db, ['workflow_entity', 'workflow_history', 'project']);
+    // Later migration creates the remaining tables ~150ms in.
+    setTimeout(() => { try { createSchema(db, ['workflow_published_version', 'shared_workflow']); } catch {} }, 150);
+    const ok = await waitForN8nDbSchemaReady(db, { timeoutMs: 5000, intervalMs: 40 });
+    assert.equal(ok, true, 'must become ready once the late-migration tables exist');
+    assert.equal(missingSchemaTables(db).length, 0);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('B8K: all 5 tables present → ready (bootstrap may run)', { skip: !DatabaseSync }, () => {
+  const { dir, db } = tmpDb();
+  try {
+    createSchema(db); // all REQUIRED_SCHEMA_TABLES
+    assert.equal(n8nDbSchemaReady(db), true);
+    assert.deepEqual(missingSchemaTables(db), []);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('B8K: readiness report exposes db_file_exists / schema_ready / missing_tables / migration_log_state', { skip: !DatabaseSync }, () => {
+  const { dir, db } = tmpDb();
+  try {
+    createSchema(db, ['workflow_entity', 'workflow_history', 'project']);
+    const logPath = path.join(dir, 'n8n.log');
+    fs.writeFileSync(logPath, 'Starting migration AddX\nFinished migration AddX\nStarting migration AddPublishedVersion\n');
+    const rep = n8nDbReadinessReport(db, { logPath });
+    assert.equal(rep.db_file_exists, true);
+    assert.equal(rep.schema_ready, false);
+    assert.ok(rep.missing_tables.includes('workflow_published_version'));
+    assert.equal(rep.migration_log_state, 'in_progress', 'unfinished Starting migration => in_progress');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('B8K: migrationLogState reads in_progress vs idle vs unknown', { skip: !DatabaseSync }, () => {
+  const { dir } = tmpDb();
+  try {
+    const lp = path.join(dir, 'n8n.log');
+    fs.writeFileSync(lp, 'Starting migration A\nFinished migration A\n');
+    assert.equal(migrationLogState(lp), 'idle');
+    fs.writeFileSync(lp, 'Starting migration A\nFinished migration A\nStarting migration B\n');
+    assert.equal(migrationLogState(lp), 'in_progress');
+    fs.writeFileSync(lp, 'n8n ready on port 5678\n');
+    assert.equal(migrationLogState(lp), 'unknown');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('B8K: workflowPresence does NOT misreport all-missing when a later table is absent', { skip: !DatabaseSync }, () => {
+  const { dir, db } = tmpDb();
+  try {
+    // workflow_entity HAS the 5 WF rows, but workflow_published_version is missing.
+    createSchema(db, ['workflow_entity', 'workflow_history', 'project']);
+    const d = new DatabaseSync(db);
+    d.exec(`INSERT INTO workflow_entity (id, name) VALUES ('rKHHjD2QBlL6EhaM','WF01');`);
+    d.close();
+    const res = workflowPresence(db, ['rKHHjD2QBlL6EhaM', 'scriptGenerateV1']);
+    assert.equal(res.schemaReady, false, 'schema not ready while workflow_published_version is missing');
+    assert.equal(res.status, 'schema_not_ready');
+    assert.equal(res.found, null, 'must NOT report a found-map (would falsely show all-missing)');
+    assert.ok(Array.isArray(res.missing_tables) && res.missing_tables.includes('workflow_published_version'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ── Launcher + UI-smoke: classification + diagnostics (source-level) ──────────
+
+test('B8K: launcher emits a structured [db-readiness] line + missing-table Chinese error', () => {
+  const src = fs.readFileSync(LAUNCHER, 'utf8');
+  assert.ok(src.includes('n8nDbReadinessReport'), 'launcher must compute a readiness report');
+  assert.ok(/\[db-readiness\]/.test(src), 'launcher must log a structured [db-readiness] line');
+  assert.ok(src.includes('n8n 数据库初始化未完成，请稍后重试或导出诊断包'), 'Chinese readiness-timeout error');
+  assert.ok(/缺失表/.test(src), 'timeout error must list the missing tables');
+  assert.ok(/healthz_ready/.test(src) && /waited_ms/.test(src), 'readiness must record healthz_ready + waited_ms');
+});
+
+test('B8K: ui-smoke classifies "no such table" as n8n_migration_readiness (not workflow_sync)', () => {
+  const src = fs.readFileSync(UI_SCRIPT, 'utf8');
+  assert.ok(/no such table[\s\S]{0,120}n8n_migration_readiness/.test(src) || /failed_stage = 'n8n_migration_readiness'/.test(src),
+    'a missing table must be failed_stage=n8n_migration_readiness');
+  // The migration-readiness branch must come BEFORE the workflow_sync branch.
+  const migIdx = src.indexOf("'n8n_migration_readiness'");
+  const syncIdx = src.indexOf("report.failed_stage = 'workflow_sync'");
+  assert.ok(migIdx > 0 && syncIdx > 0 && migIdx < syncIdx, 'migration-readiness classification must precede workflow_sync');
+  for (const f of ['db_readiness', 'healthz_ready', 'schema_ready', 'missing_tables', 'migration_log_state']) {
+    assert.ok(src.includes(f), `report must include ${f}`);
+  }
 });
