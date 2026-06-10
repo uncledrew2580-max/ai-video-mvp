@@ -589,11 +589,11 @@ test('B8M: the brief gate requires THIS-run save signals + UI/config/runtime clo
   assert.ok(/if \(!closureOk\)[\s\S]{0,200}fail\('config_save_mismatch'/.test(src), 'a not-closed config must fail config_save_mismatch');
 });
 
-test('B8M: api_key_saved_via_ui=false (no /config-save 200) still fails even if a badge shows 已配置', () => {
+test('B8M: api_key_saved_via_ui=false (no /config-save 2xx) still fails even if a badge shows 已配置', () => {
   const src = readUi();
-  // api_key_saved_via_ui is gated on the actual /config-save POST returning 200.
+  // api_key_saved_via_ui is gated on the actual /config-save POST returning 2xx.
   assert.ok(/api_key_saved_via_ui = saveOk/.test(src), 'api_key_saved_via_ui from the real /config-save response');
-  assert.ok(/resp\.status\(\) === 200/.test(src), 'must require a 200 from /config-save');
+  assert.ok(/resp\.status\(\) >= 200 && resp\.status\(\) < 300/.test(src), 'must require a 2xx from /config-save');
   // The gate itself must reject the run when api_key_saved_via_ui is false.
   assert.ok(/const closureOk =[\s\S]{0,320}report\.api_key_saved_via_ui/.test(src), 'closureOk must require api_key_saved_via_ui');
   // And surface it in the diagnostic message.
@@ -635,4 +635,76 @@ test('B8M: image-only boundaries + no-model still hold in the config path', () =
   const briefNavIdx = src.indexOf('await page.goto(`${uiBase}/new-project`');
   assert.ok(cfgIdx > 0 && briefNavIdx > cfgIdx, 'the brief (generation) must come AFTER the config closure gate');
   assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'stop-proof flags remain true');
+});
+
+// ── P14-B8O: config-save ACTION must really trigger /config-save ──────────────
+
+test('B8O: input fill fires framework events + blur (not just a DOM value set)', () => {
+  const src = readUi();
+  assert.ok(/\.dispatchEvent\('input'\)/.test(src) && /\.dispatchEvent\('change'\)/.test(src), 'must dispatch input + change events');
+  assert.ok(/\.press\('Tab'\)/.test(src) || /\.blur\(\)/.test(src), 'must blur the input after fill');
+  assert.ok(/api_key_input_filled = .*inputValue\(\)/.test(src), 'must verify the input value committed');
+});
+
+test('B8O: the save button is checked for visible/enabled before click; fails with state if not', () => {
+  const src = readUi();
+  assert.ok(/save_button_visible = await saveBtn\.isVisible\(\)/.test(src), 'must read save button visibility');
+  assert.ok(/save_button_enabled = await saveBtn\.isEnabled\(\)/.test(src), 'must read save button enabled state');
+  assert.ok(/fail\('config_save_button_not_actionable'/.test(src), 'a disabled/hidden save button must fail with state');
+  // The diagnostic captures disabled / aria-disabled / className / rect.
+  assert.ok(/aria-disabled/.test(src) && /getBoundingClientRect/.test(src) && /save-button-state\.json/.test(src),
+    'must dump disabled/aria-disabled/className/bounding-box state');
+});
+
+test('B8O: a missing save button fails and reports the visible buttons', () => {
+  const src = readUi();
+  assert.ok(/fail\('config_save_button_missing'/.test(src), 'must fail when the save button is not found');
+  assert.ok(/report\.visible_buttons = await visibleButtons\(\)/.test(src), 'must record visible buttons');
+});
+
+test('B8O: a click that does NOT POST /config-save fails config_save_action_not_triggered', () => {
+  const src = readUi();
+  assert.ok(/page\.waitForRequest\(\(r\) => r\.url\(\)\.includes\('\/config-save'\) && r\.method\(\) === 'POST'/.test(src),
+    'must wait for the /config-save POST request');
+  assert.ok(/config_save_post_seen = Boolean\(req\)/.test(src), 'must record whether the POST was seen');
+  assert.ok(/if \(!req\)[\s\S]{0,700}fail\('config_save_action_not_triggered'/.test(src),
+    'no /config-save POST => config_save_action_not_triggered');
+  // It must NOT continue to config readback when the action did not trigger.
+  const notTrigIdx = src.indexOf("fail('config_save_action_not_triggered'");
+  const readbackIdx = src.indexOf('const summary = configSummary()');
+  assert.ok(notTrigIdx > 0 && readbackIdx > notTrigIdx, 'readback must be after (gated by) the action-not-triggered guard');
+});
+
+test('B8O: only a /config-save 2xx proceeds; a non-2xx fails before readback', () => {
+  const src = readUi();
+  assert.ok(/config_save_post_status = resp \? resp\.status\(\) : null/.test(src), 'must record the POST status');
+  assert.ok(/if \(!saveOk\)[\s\S]{0,400}fail\('config_save_mismatch'/.test(src), 'a non-2xx /config-save must fail');
+  // The non-2xx guard precedes the readback summary.
+  const nonOkIdx = src.indexOf('returned non-2xx');
+  const readbackIdx = src.indexOf('const summary = configSummary()');
+  assert.ok(nonOkIdx > 0 && readbackIdx > nonOkIdx, 'readback must be after the non-2xx guard');
+});
+
+test('B8O: action-trigger diagnostics fields are all in the report', () => {
+  const src = readUi();
+  for (const f of [
+    'api_key_input_selector_matched', 'api_key_input_filled', 'save_button_selector_matched',
+    'save_button_visible', 'save_button_enabled', 'save_button_click_attempted',
+    'config_save_post_seen', 'config_save_post_status', 'renderer_requests', 'visible_buttons',
+    'save_handler_present',
+  ]) {
+    assert.ok(src.includes(f), `report must include ${f}`);
+  }
+  // The not-triggered failure must snapshot requests + a DOM summary + screenshot.
+  assert.ok(/renderer_requests = \[\.\.\.new Set\(requestLog\)\]/.test(src), 'must snapshot renderer_requests');
+  assert.ok(/config-save-action-not-triggered-dom\.json/.test(src) && /02b-config-save-action-not-triggered\.png/.test(src),
+    'must dump DOM summary + screenshot on not-triggered');
+});
+
+test('B8O: the save link is the real UI click — no direct config write / no synthetic success', () => {
+  const src = readUi();
+  assert.ok(/await saveBtn\.click\(\)/.test(src), 'must perform a real button click');
+  assert.ok(!/writeFileSync\([^)]*local-config\.json/.test(src), 'must never write local-config.json directly');
+  assert.ok(!/api_key_saved_via_ui = true\b/.test(src), 'must never hardcode save success');
+  assert.ok(!/page\.evaluate\([^)]*saveConfig\(/.test(src), 'must not call saveConfig() programmatically to fake the save');
 });

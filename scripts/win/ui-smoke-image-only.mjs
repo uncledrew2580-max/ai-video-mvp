@@ -131,8 +131,18 @@ const report = {
   db_readiness: null, // { healthz_ready, db_file_exists, schema_ready, missing_tables, migration_log_state, waited_ms }
   // config / presence milestones (best-effort, no generation)
   api_key_provided: false,
+  api_key_input_selector_matched: false, // the Kie API Key input was located
   api_key_input_filled: false,          // the key was actually typed into the input
-  api_key_saved_via_ui: false,          // UI /config-save returned 200
+  save_button_selector_matched: false,  // the 保存配置 button was located
+  save_button_visible: null,
+  save_button_enabled: null,
+  save_button_click_attempted: false,
+  save_handler_present: null,           // window.saveConfig is defined on the page
+  config_save_post_seen: false,         // a POST /config-save request was observed
+  config_save_post_status: null,        // its HTTP status (or null)
+  renderer_requests: [],                // origin+pathname of requests seen (no secrets)
+  visible_buttons: [],                  // button labels on the config page (diagnostic)
+  api_key_saved_via_ui: false,          // UI /config-save returned 2xx
   configured_reported_by_ui: false,     // KEY-specific UI status (badge/effective), NOT route tags
   api_key_loaded_from_config: false,    // local-config.json actually holds a key (masked)
   api_key_effective_for_runtime: false, // server /health/meta reports kie_api_key_configured
@@ -661,30 +671,104 @@ async function main() {
     if (apiKey) {
       await page.goto(`${uiBase}/config`, { waitUntil: 'domcontentloaded' });
       await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+      const visibleButtons = async () => page.evaluate(() =>
+        Array.from(document.querySelectorAll('button, a.btn')).map((b) => (b.innerText || b.textContent || '').trim()).filter(Boolean).slice(0, 30),
+      ).catch(() => []);
+
       // The Kie API Key input is the password field bound to providers.kie.api_key.
       const keyInput = await firstLocator(page, [
         'input[data-testid="kie-api-key-input"]',
         'input[data-path="providers.kie.api_key"]',
       ]);
+      report.api_key_input_selector_matched = Boolean(keyInput);
       if (!keyInput) {
+        report.visible_buttons = await visibleButtons();
         await captureDomSummary(page, 'config-dom-summary.json');
         fail('config_input_missing', new Error('Kie API Key input not found on /config'), apiKey);
         return;
       }
       await keyInput.waitFor({ state: 'visible', timeout: 20000 });
       await keyInput.fill(apiKey); // typed into a type=password field; never logged
-      // Verify the value was actually set (length only — never the value).
+      // Don't just set the DOM value — fire framework-recognizable events + blur so
+      // the value is committed before the save click.
+      try {
+        await keyInput.dispatchEvent('input');
+        await keyInput.dispatchEvent('change');
+        await keyInput.press('Tab').catch(() => {});
+        await keyInput.evaluate((el) => { if (el && el.blur) el.blur(); }).catch(() => {});
+      } catch {}
       report.api_key_input_filled = ((await keyInput.inputValue().catch(() => '')) || '').length > 0;
+      if (!report.api_key_input_filled) {
+        await captureDomSummary(page, 'config-input-not-filled-dom.json');
+        fail('config_input_not_filled', new Error('Kie API Key input value did not update after fill'), apiKey);
+        return;
+      }
 
-      // Real click on 保存配置 → saveConfig() POSTs /config-save.
-      const saveResp = page.waitForResponse((r) => r.url().includes('/config-save') && r.request().method() === 'POST', { timeout: 25000 });
+      // Locate the 保存配置 button and confirm it is actually clickable.
       const saveBtn = await firstLocator(page, ['button[data-testid="save-config-btn"]', '#save-btn', 'button:has-text("保存配置")']);
-      await (saveBtn || page.locator('#save-btn')).click();
+      report.save_button_selector_matched = Boolean(saveBtn);
+      report.save_handler_present = await page.evaluate(() => typeof window.saveConfig === 'function').catch(() => null);
+      if (!saveBtn) {
+        report.visible_buttons = await visibleButtons();
+        await captureDomSummary(page, 'save-button-missing-dom.json');
+        await screenshot(page, '02b-save-button-missing.png');
+        fail('config_save_button_missing', new Error('保存配置 button not found on /config'), apiKey);
+        return;
+      }
+      report.save_button_visible = await saveBtn.isVisible().catch(() => null);
+      report.save_button_enabled = await saveBtn.isEnabled().catch(() => null);
+      if (!report.save_button_visible || !report.save_button_enabled) {
+        const state = await saveBtn.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          return { disabled: el.disabled, ariaDisabled: el.getAttribute('aria-disabled'), className: el.className, text: (el.innerText || '').trim(), rect: { x: r.x, y: r.y, w: r.width, h: r.height } };
+        }).catch(() => null);
+        report.visible_buttons = await visibleButtons();
+        try { fs.writeFileSync(path.join(DIAG_DIR, 'save-button-state.json'), JSON.stringify(state, null, 2)); } catch {}
+        await screenshot(page, '02b-save-button-not-actionable.png');
+        fail('config_save_button_not_actionable', new Error(`保存配置 button not actionable (visible=${report.save_button_visible}, enabled=${report.save_button_enabled})`), apiKey);
+        return;
+      }
+
+      // Real click → saveConfig() → POST /config-save. Listen for the REQUEST (to
+      // detect whether the action even fires) AND the response (for its status).
+      const saveReq = page.waitForRequest((r) => r.url().includes('/config-save') && r.method() === 'POST', { timeout: 12000 });
+      const saveResp = page.waitForResponse((r) => r.url().includes('/config-save') && r.request().method() === 'POST', { timeout: 25000 });
+      await saveBtn.scrollIntoViewIfNeeded().catch(() => {});
+      await saveBtn.click();
+      report.save_button_click_attempted = true;
+      report.stages.push('config_save_clicked');
+
+      const req = await saveReq.catch(() => null);
+      report.config_save_post_seen = Boolean(req);
+      if (!req) {
+        // The precise B8N blocker: the click did NOT trigger a /config-save POST.
+        report.renderer_requests = [...new Set(requestLog)];
+        report.visible_buttons = await visibleButtons();
+        const ui0 = await readConfigStatus(page);
+        report.visible_config_status_texts = ui0.texts;
+        await captureDomSummary(page, 'config-save-action-not-triggered-dom.json');
+        await screenshot(page, '02b-config-save-action-not-triggered.png');
+        fail('config_save_action_not_triggered', new Error(
+          `保存配置 click did not POST /config-save ` +
+          `(save_button_visible=${report.save_button_visible}, save_button_enabled=${report.save_button_enabled}, ` +
+          `save_handler_present=${report.save_handler_present}, api_key_input_filled=${report.api_key_input_filled})`,
+        ), apiKey);
+        return;
+      }
       const resp = await saveResp.catch(() => null);
+      report.config_save_post_status = resp ? resp.status() : null;
       let saveOk = false;
-      try { const b = resp ? JSON.parse(await resp.text()) : null; saveOk = Boolean(resp && resp.status() === 200 && (!b || b.ok !== false)); } catch { saveOk = Boolean(resp && resp.status() === 200); }
+      try { const b = resp ? JSON.parse(await resp.text()) : null; saveOk = Boolean(resp && resp.status() >= 200 && resp.status() < 300 && (!b || b.ok !== false)); } catch { saveOk = Boolean(resp && resp.status() >= 200 && resp.status() < 300); }
       report.api_key_saved_via_ui = saveOk;
       report.stages.push('config_saved_via_ui');
+      if (!saveOk) {
+        // The POST fired but the save did not succeed (non-2xx). Hard gate.
+        report.renderer_requests = [...new Set(requestLog)];
+        await captureDomSummary(page, 'config-save-failed-dom.json');
+        await screenshot(page, '02b-config-save-failed.png');
+        fail('config_save_mismatch', new Error(`/config-save returned non-2xx (status=${report.config_save_post_status})`), apiKey);
+        return;
+      }
 
       // saveConfig redirects to /config ~700ms after a successful save; let it
       // settle, then load a fresh /config for the authoritative status read.
