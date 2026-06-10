@@ -138,6 +138,7 @@ function createWindow() {
 
   mainWindow.webContents.on('did-finish-load', () => {
     injectWorkbenchButton();
+    injectConfigSaveHandler();
   });
 
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(`
@@ -188,6 +189,59 @@ function injectWorkbenchButton() {
       });
       btn.addEventListener('click', () => { window.location.href = ${JSON.stringify(UI_URL)}; });
       document.documentElement.appendChild(btn);
+    })();
+  `).catch(() => {});
+}
+
+// P14-B8T: the config page's own inline <script> does NOT execute in the packaged
+// Windows renderer (B8S: save_handler_present=false — neither window.saveConfig nor
+// the inline addEventListener marker appear — while this executeJavaScript injection
+// DOES run, e.g. the floating button above). So bind the 保存配置 click here, on the
+// proven injection path. It collects the SAME [data-path] form fields the page's
+// collectConfigBody() reads and POSTs the SAME /config-save endpoint — no direct
+// config write, no faked success, no business/route change. Idempotent + marker-gated
+// so it never double-fires with the page's own binding (mac, where inline runs).
+function injectConfigSaveHandler() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const url = mainWindow.webContents.getURL();
+  if (!url.startsWith('http://')) return;
+  mainWindow.webContents.executeJavaScript(`
+    (() => {
+      if (window.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND) return;
+      function collect() {
+        const body = { apis: {}, output: {}, services: {} };
+        document.querySelectorAll('[data-path]').forEach((el) => {
+          const parts = el.dataset.path.split('.');
+          let ref = body;
+          for (let i = 0; i < parts.length - 1; i++) { ref[parts[i]] = ref[parts[i]] || {}; ref = ref[parts[i]]; }
+          ref[parts[parts.length - 1]] = el.value;
+        });
+        if (body.tasks && body.tasks.creative_direction && body.tasks.creative_direction.model) {
+          body.tasks.script_framework = body.tasks.script_framework || {};
+          body.tasks.storyboard_prompt = body.tasks.storyboard_prompt || {};
+          body.tasks.script_framework.model = body.tasks.creative_direction.model;
+          body.tasks.storyboard_prompt.model = body.tasks.creative_direction.model;
+        }
+        return body;
+      }
+      async function doSave(btn) {
+        const prev = btn.textContent;
+        btn.disabled = true; btn.textContent = '保存中…';
+        try {
+          const r = await fetch('/config-save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(collect()) });
+          if (r.ok) { setTimeout(() => { window.location.href = '/config'; }, 600); }
+          else { window.alert('保存失败，请重试'); btn.disabled = false; btn.textContent = prev; }
+        } catch (err) { window.alert('网络错误: ' + ((err && err.message) || err)); btn.disabled = false; btn.textContent = prev; }
+      }
+      document.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest && e.target.closest('[data-testid="save-config-button"], #save-btn');
+        if (!btn) return;
+        e.preventDefault();
+        doSave(btn);
+      }, true);
+      window.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND = true;
+      try { if (document.body) document.body.dataset.configSaveHandlerBound = 'true'; } catch (_) {}
+      try { const sb = document.querySelector('[data-testid="save-config-button"], #save-btn'); if (sb) sb.dataset.boundSave = '1'; } catch (_) {}
     })();
   `).catch(() => {});
 }

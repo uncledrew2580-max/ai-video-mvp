@@ -5649,8 +5649,14 @@ function renderConfigPage(saved = false, error = '') {
   window.syncTextModel = syncTextModel;
   (function bindConfigSaveHandler() {
     const bind = () => {
+      if (window.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND) return; // already bound (e.g. desktop-shell injection on Windows)
       const sb = document.querySelector('[data-testid="save-config-button"]') || document.getElementById('save-btn');
-      if (sb && !sb.dataset.boundSave) { sb.dataset.boundSave = '1'; sb.addEventListener('click', (e) => saveConfig(e)); }
+      if (sb && !sb.dataset.boundSave) {
+        sb.dataset.boundSave = '1';
+        sb.addEventListener('click', (e) => saveConfig(e));
+        window.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND = true;
+        try { if (document.body) document.body.dataset.configSaveHandlerBound = 'true'; } catch (_) {}
+      }
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
     else bind();

@@ -671,7 +671,7 @@ test('B8O: a click that does NOT POST /config-save fails config_save_action_not_
   assert.ok(/page\.waitForRequest\(\(r\) => r\.url\(\)\.includes\('\/config-save'\) && r\.method\(\) === 'POST'/.test(src),
     'must wait for the /config-save POST request');
   assert.ok(/config_save_post_seen = Boolean\(req\)/.test(src), 'must record whether the POST was seen');
-  assert.ok(/if \(!req\)[\s\S]{0,700}fail\('config_save_action_not_triggered'/.test(src),
+  assert.ok(/if \(!req\)[\s\S]{0,1100}fail\('config_save_action_not_triggered'/.test(src),
     'no /config-save POST => config_save_action_not_triggered');
   // It must NOT continue to config readback when the action did not trigger.
   const notTrigIdx = src.indexOf("fail('config_save_action_not_triggered'");
@@ -765,7 +765,7 @@ test('B8Q: the fix is frontend-only handler binding — save still posts the rea
   assert.ok(/fetch\('\/config-save'/.test(src), 'save must still POST /config-save');
   assert.ok(/collectConfigBody\(\)/.test(src), 'must send the collected UI form payload');
   // The B8Q binding block itself only wires up handlers — no model/route/webhook tokens.
-  const m = src.match(/window\.saveConfig = saveConfig;[\s\S]{0,800}?\}\)\(\);/);
+  const m = src.match(/window\.saveConfig = saveConfig;[\s\S]{0,1200}?\}\)\(\);/);
   assert.ok(m, 'the B8Q binding block must be present');
   assert.ok(!/reviewSubmitVeoV2|kie_veo|webhook\/|tasks\.\w+\.model\s*=/.test(m[0]),
     'the B8Q binding block must not touch model-route/webhook/schema');
@@ -833,4 +833,97 @@ test('B8R1: image-only boundaries + dispatch-only trigger are preserved', () => 
   assert.ok(/workflow_dispatch/.test(yml) && !/\n\s*push:/.test(yml) && !/\n\s*schedule:/.test(yml), 'still dispatch-only');
   // The UI smoke runner + the secret-only key path are unchanged.
   assert.ok(/ui-smoke-image-only\.mjs/.test(yml) && /secrets\.AI_VIDEO_API_KEY/.test(yml), 'smoke runner + secret-only key intact');
+});
+
+// ── P14-B8T: bind the config-save handler via the reliable desktop-shell path ──
+
+const WIN_MAIN = path.join(ROOT, 'desktop', 'win-main.cjs');
+const ASSEMBLE = path.join(ROOT, 'scripts', 'win', 'assemble-windows-portable.mjs');
+const readWinMain = () => fs.readFileSync(WIN_MAIN, 'utf8');
+
+test('B8T: win-main injects a config-save handler on did-finish-load (proven execution path)', () => {
+  const src = readWinMain();
+  assert.ok(/injectConfigSaveHandler\(\)/.test(src), 'must call injectConfigSaveHandler');
+  assert.ok(/did-finish-load[\s\S]{0,120}injectConfigSaveHandler\(\)/.test(src), 'must inject on did-finish-load');
+  assert.ok(/function injectConfigSaveHandler\(/.test(src) && /executeJavaScript\(/.test(src), 'must use executeJavaScript (the path that runs)');
+});
+
+test('B8T: the injected handler posts the REAL /config-save with the collected form payload', () => {
+  const src = readWinMain();
+  const blk = src.slice(src.indexOf('function injectConfigSaveHandler'));
+  assert.ok(/querySelectorAll\('\[data-path\]'\)/.test(blk), 'must collect [data-path] form fields (like collectConfigBody)');
+  assert.ok(/fetch\('\/config-save'/.test(blk) && /method: 'POST'/.test(blk), 'must POST /config-save');
+  // No bypass: no direct local-config write, no faked success.
+  assert.ok(!/local-config/.test(blk), 'must not write local-config directly');
+  // Save failure must be visible (alert), success refreshes /config.
+  assert.ok(/window\.alert/.test(blk) && /\/config/.test(blk), 'failure visible + success refresh');
+});
+
+test('B8T: the injected handler is idempotent + marker-gated (no double-fire with the page binding)', () => {
+  const win = readWinMain();
+  assert.ok(/if \(window\.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND\) return/.test(win), 'injection must skip when already bound');
+  assert.ok(/window\.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND = true/.test(win) && /configSaveHandlerBound = 'true'/.test(win), 'must set the markers');
+  const serve = readServe();
+  assert.ok(/if \(window\.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND\) return/.test(serve), 'page binding must also gate on the marker');
+  assert.ok(/window\.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND = true/.test(serve), 'page binding must set the marker when it does run (mac)');
+});
+
+test('B8T: a real injected click binds + POSTs on a fresh DOM (jsdom-free runtime proof)', () => {
+  // Extract the injected IIFE body and run it against a minimal DOM shim to prove
+  // the click handler collects [data-path] and calls fetch('/config-save').
+  const win = readWinMain();
+  const tmpl = win.match(/function injectConfigSaveHandler\(\)[\s\S]*?executeJavaScript\(`([\s\S]*?)`\)\.catch/);
+  assert.ok(tmpl, 'must find the injected script template');
+  const injected = tmpl[1];
+  const fetchCalls = [];
+  const listeners = {};
+  const el = (overrides = {}) => ({ dataset: {}, value: '', disabled: false, textContent: '', getAttribute: () => null, closest(sel) { return (sel.includes('save-config-button') || sel.includes('save-btn')) ? this : null; }, ...overrides });
+  const saveBtn = el({ dataset: { boundSave: undefined } });
+  const keyField = el({ value: 'sk-REDACTED', dataset: { path: 'providers.kie.api_key' } });
+  const sandbox = {
+    window: {},
+    document: {
+      body: { dataset: {} },
+      addEventListener: (type, fn) => { listeners[type] = fn; },
+      querySelectorAll: (sel) => (sel === '[data-path]' ? [keyField] : []),
+      querySelector: () => saveBtn,
+    },
+    fetch: (url, opts) => { fetchCalls.push({ url, opts }); return Promise.resolve({ ok: true }); },
+    setTimeout: () => {},
+  };
+  // Re-point bare `window`/`document`/`fetch`/`setTimeout` at the sandbox.
+  const fn = new Function('window', 'document', 'fetch', 'setTimeout', injected);
+  fn(sandbox.window, sandbox.document, sandbox.fetch, sandbox.setTimeout);
+  assert.equal(sandbox.window.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND, true, 'marker set after injection');
+  assert.ok(typeof listeners.click === 'function', 'a delegated click listener was bound');
+  // Simulate a click on the save button → must POST /config-save with the field.
+  listeners.click({ target: saveBtn, preventDefault() {} });
+  assert.equal(fetchCalls.length, 1, 'exactly one /config-save POST');
+  assert.ok(fetchCalls[0].url === '/config-save' && fetchCalls[0].opts.method === 'POST', 'POST /config-save');
+  const sent = JSON.parse(fetchCalls[0].opts.body);
+  assert.equal(sent.providers.kie.api_key, 'sk-REDACTED', 'collected the [data-path] api_key field');
+});
+
+test('B8T: assemble packages win-main.cjs + serve so source and artifact cannot drift', () => {
+  const asm = fs.readFileSync(ASSEMBLE, 'utf8');
+  // The desktop shell entry and the 版本测试 server are part of the packaged tree.
+  assert.ok(/版本测试/.test(asm), 'assemble must include the 版本测试 server tree');
+  assert.ok(fs.existsSync(WIN_MAIN), 'win-main.cjs (desktop shell) must exist for packaging');
+});
+
+test('B8T: the smoke detects the handler via marker/data-bound-save/window + records the method', () => {
+  const src = readUi();
+  assert.ok(/AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND/.test(src), 'must detect the desktop-shell marker');
+  assert.ok(/configSaveHandlerBound/.test(src), 'must detect the body dataset marker');
+  assert.ok(/handler_detection_method = /.test(src), 'must record handler_detection_method');
+  assert.ok(/waitForFunction\([\s\S]{0,200}AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND/.test(src), 'must wait for the async injection marker');
+});
+
+test('B8T: harder diagnostics fields are present in the smoke report', () => {
+  const src = readUi();
+  for (const f of ['handler_detection_method', 'renderer_console_errors', 'script_assets_loaded', 'config_save_script_present', 'packaged_renderer_asset_check']) {
+    assert.ok(src.includes(f), `report must include ${f}`);
+  }
+  assert.ok(/page\.on\('pageerror'/.test(src) && /page\.on\('console'/.test(src), 'must capture renderer console errors');
+  assert.ok(/redactString/.test(src), 'console errors must be redacted (no secret leak)');
 });

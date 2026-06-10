@@ -137,10 +137,15 @@ const report = {
   save_button_visible: null,
   save_button_enabled: null,
   save_button_click_attempted: false,
-  save_handler_present: null,           // window.saveConfig is defined on the page
+  save_handler_present: null,           // a real save handler is bound (marker/window/data-bound-save)
+  handler_detection_method: null,       // which signal proved it: marker | data-bound-save | window.saveConfig | none
   config_save_post_seen: false,         // a POST /config-save request was observed
   config_save_post_status: null,        // its HTTP status (or null)
   renderer_requests: [],                // origin+pathname of requests seen (no secrets)
+  renderer_console_errors: [],          // redacted pageerror/console.error messages
+  script_assets_loaded: [],             // external <script src> on the config page (diagnostic)
+  config_save_script_present: null,     // the config page HTML references the save handler/button
+  packaged_renderer_asset_check: null,  // { save_button, data_testid, handler_marker_or_window } booleans
   visible_buttons: [],                  // button labels on the config page (diagnostic)
   api_key_saved_via_ui: false,          // UI /config-save returned 2xx
   configured_reported_by_ui: false,     // KEY-specific UI status (badge/effective), NOT route tags
@@ -663,6 +668,13 @@ async function main() {
   report.window_state = 'loaded';
   report.stages.push('window_loaded');
   page.on('dialog', (d) => { d.accept().catch(() => {}); });
+  // B8T: capture renderer JS errors (redacted) so a non-executing page script /
+  // ReferenceError is visible in the report.
+  const pushConsoleError = (s) => {
+    try { const t = redactString(String(s || '')).slice(0, 300); if (t && report.renderer_console_errors.length < 25 && !report.renderer_console_errors.includes(t)) report.renderer_console_errors.push(t); } catch {}
+  };
+  page.on('pageerror', (err) => pushConsoleError((err && err.message) || err));
+  page.on('console', (msg) => { try { if (msg.type() === 'error') pushConsoleError(msg.text()); } catch {} });
   const uiBase = new URL(page.url()).origin;
   await screenshot(page, '01-workbench.png');
 
@@ -704,16 +716,53 @@ async function main() {
         return;
       }
 
+      // Packaged-renderer asset diagnostics: does the served config page reference
+      // the save button + a handler at all (rules out a missing/stale asset)?
+      try {
+        const html = await page.content();
+        report.config_save_script_present = /data-testid="save-config-button"/.test(html) && /saveConfig|config-save/.test(html);
+        report.packaged_renderer_asset_check = {
+          save_button: /data-testid="save-config-button"|id="save-btn"/.test(html),
+          data_testid: /data-testid="save-config-button"/.test(html) && /data-testid="kie-api-key-input"/.test(html),
+          handler_marker_or_window: /AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND|window\.saveConfig/.test(html),
+        };
+      } catch (e) { report.packaged_renderer_asset_check = { error: String(e.message || e) }; }
+      report.script_assets_loaded = await page.evaluate(() =>
+        Array.from(document.scripts).map((s) => s.src).filter(Boolean).slice(0, 20),
+      ).catch(() => []);
+
+      // The desktop-shell injection (B8T) binds the handler on did-finish-load, which
+      // is async — wait briefly for its marker before judging handler presence.
+      await page.waitForFunction(
+        () => window.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND === true
+          || (document.body && document.body.dataset && document.body.dataset.configSaveHandlerBound === 'true')
+          || !!document.querySelector('[data-bound-save="1"]')
+          || typeof window.saveConfig === 'function',
+        { timeout: 6000 },
+      ).catch(() => {});
+
       // Locate the 保存配置 button and confirm it is actually clickable.
       const saveBtn = await firstLocator(page, ['button[data-testid="save-config-button"]', '#save-btn', 'button:has-text("保存配置")']);
       report.save_button_selector_matched = Boolean(saveBtn);
-      // The handler is "present" when window.saveConfig is exposed OR the save
-      // button carries the addEventListener binding marker (B8Q closure binding).
-      report.save_handler_present = await page.evaluate(() => {
-        const fn = typeof window.saveConfig === 'function';
-        const bound = !!document.querySelector('[data-testid="save-config-button"][data-bound-save="1"], #save-btn[data-bound-save="1"]');
-        return fn || bound;
+      // The handler is "present" when ANY real binding is detectable: the desktop-shell
+      // marker (window or body dataset), the data-bound-save attribute, or window.saveConfig.
+      const det = await page.evaluate(() => {
+        const out = { marker_window: false, marker_body: false, data_bound_save: false, window_saveconfig: false, button_onclick: null, button_testid: null };
+        out.marker_window = window.AI_VIDEO_CONFIG_SAVE_HANDLER_BOUND === true;
+        out.marker_body = !!(document.body && document.body.dataset && document.body.dataset.configSaveHandlerBound === 'true');
+        out.data_bound_save = !!document.querySelector('[data-testid="save-config-button"][data-bound-save="1"], #save-btn[data-bound-save="1"]');
+        out.window_saveconfig = typeof window.saveConfig === 'function';
+        const sb = document.querySelector('[data-testid="save-config-button"]') || document.getElementById('save-btn');
+        if (sb) { out.button_onclick = sb.getAttribute('onclick'); out.button_testid = sb.getAttribute('data-testid'); }
+        return out;
       }).catch(() => null);
+      report.save_handler_present = !!(det && (det.marker_window || det.marker_body || det.data_bound_save || det.window_saveconfig));
+      report.handler_detection_method = !det ? 'eval_error'
+        : (det.marker_window || det.marker_body) ? 'marker'
+        : det.data_bound_save ? 'data-bound-save'
+        : det.window_saveconfig ? 'window.saveConfig'
+        : 'none';
+      report._handler_detail = det; // captured into the failure diagnostics below
       if (!saveBtn) {
         report.visible_buttons = await visibleButtons();
         await captureDomSummary(page, 'save-button-missing-dom.json');
@@ -747,17 +796,19 @@ async function main() {
       const req = await saveReq.catch(() => null);
       report.config_save_post_seen = Boolean(req);
       if (!req) {
-        // The precise B8N blocker: the click did NOT trigger a /config-save POST.
+        // The precise B8N/B8S blocker: the click did NOT trigger a /config-save POST.
         report.renderer_requests = [...new Set(requestLog)];
         report.visible_buttons = await visibleButtons();
         const ui0 = await readConfigStatus(page);
         report.visible_config_status_texts = ui0.texts;
+        try { fs.writeFileSync(path.join(DIAG_DIR, 'config-save-handler-detail.json'), JSON.stringify({ handler_detection_method: report.handler_detection_method, detail: report._handler_detail, packaged_renderer_asset_check: report.packaged_renderer_asset_check, config_save_script_present: report.config_save_script_present, script_assets_loaded: report.script_assets_loaded, renderer_console_errors: report.renderer_console_errors }, null, 2)); } catch {}
         await captureDomSummary(page, 'config-save-action-not-triggered-dom.json');
         await screenshot(page, '02b-config-save-action-not-triggered.png');
         fail('config_save_action_not_triggered', new Error(
           `保存配置 click did not POST /config-save ` +
           `(save_button_visible=${report.save_button_visible}, save_button_enabled=${report.save_button_enabled}, ` +
-          `save_handler_present=${report.save_handler_present}, api_key_input_filled=${report.api_key_input_filled})`,
+          `save_handler_present=${report.save_handler_present}, handler_detection_method=${report.handler_detection_method}, ` +
+          `api_key_input_filled=${report.api_key_input_filled})`,
         ), apiKey);
         return;
       }
