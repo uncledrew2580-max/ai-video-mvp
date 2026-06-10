@@ -131,11 +131,15 @@ const report = {
   db_readiness: null, // { healthz_ready, db_file_exists, schema_ready, missing_tables, migration_log_state, waited_ms }
   // config / presence milestones (best-effort, no generation)
   api_key_provided: false,
+  api_key_input_filled: false,          // the key was actually typed into the input
   api_key_saved_via_ui: false,          // UI /config-save returned 200
-  configured_reported_by_ui: false,     // UI 已配置 badge after reload
+  configured_reported_by_ui: false,     // KEY-specific UI status (badge/effective), NOT route tags
   api_key_loaded_from_config: false,    // local-config.json actually holds a key (masked)
   api_key_effective_for_runtime: false, // server /health/meta reports kie_api_key_configured
   config_save_mismatch: false,          // UI says configured but the config is not saved
+  config_path: null,
+  redacted_config_summary: null,        // { key_present, key_masked, base_url_present, effective_route_present }
+  visible_config_status_texts: [],      // the on-page key/effective status texts (no secrets)
   brief_form_found: false,              // the /new-project intake form was located
   output_dir: null,
   output_dir_confirmed: false,
@@ -225,16 +229,75 @@ function httpGetJson(urlStr, timeoutMs = 4000) {
   });
 }
 
-// Read-only presence check of the effective config's API key. Returns a BOOLEAN
-// only — the key value is never read into the report, logged, or uploaded.
-function configKeyPresent() {
+// Mask a secret to a short, non-reversible hint (sk-****abcd). NEVER the full key.
+function maskKey(k) {
+  const s = String(k || '');
+  if (!s) return '';
+  if (s.length <= 8) return '****';
+  return `${s.slice(0, 3)}****${s.slice(-4)}`;
+}
+
+// Read-only summary of the effective config — PRESENCE + masked hint only. The
+// full API key / plaintext local-config is never read into the report or uploaded.
+function configSummary() {
+  const config_path = path.join(userSupportDir(), 'config', 'local-config.json');
   try {
-    const cfgPath = path.join(userSupportDir(), 'config', 'local-config.json');
-    if (!fs.existsSync(cfgPath)) return false;
-    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-    const k = (cfg?.providers?.kie?.api_key || cfg?.kie?.api_key || '');
-    return typeof k === 'string' && k.trim().length > 0;
-  } catch { return false; }
+    if (!fs.existsSync(config_path)) {
+      return { config_path, exists: false, key_present: false, key_masked: '', base_url_present: false, effective_route_present: false };
+    }
+    const cfg = JSON.parse(fs.readFileSync(config_path, 'utf8'));
+    const key = String(cfg?.providers?.kie?.api_key || cfg?.kie?.api_key || '').trim();
+    const base = String(cfg?.providers?.kie?.base_url || cfg?.kie?.base_url || '').trim();
+    const route = Boolean(cfg?.tasks?.storyboard_image?.model || cfg?.tasks?.creative_direction?.model || cfg?.providers?.kie);
+    return {
+      config_path,
+      exists: true,
+      key_present: key.length > 0,
+      key_masked: key ? maskKey(key) : '',
+      base_url_present: base.length > 0,
+      effective_route_present: route,
+    };
+  } catch (e) {
+    return { config_path, exists: true, key_present: false, key_masked: '', base_url_present: false, effective_route_present: false, read_error: String(e.message || e) };
+  }
+}
+
+// Read the KEY-SPECIFIC config status from the rendered page — distinguishing the
+// Kie API Key badge / effective-config key from the "当前接口路由" route tags (which
+// are always 已配置 regardless of whether the key was saved — the B8L false positive).
+async function readConfigStatus(page) {
+  try {
+    return await page.evaluate(() => {
+      const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+      // The "Kie API Key" heading is immediately followed by its status badge.
+      let keyBadge = '';
+      const h3 = Array.from(document.querySelectorAll('h3')).find((h) => /Kie API Key/.test(h.textContent || ''));
+      if (h3 && h3.nextElementSibling) keyBadge = norm(h3.nextElementSibling.textContent);
+      // The "当前实际生效配置" section labels an "API Key" value (未填写 / a masked key).
+      let effectiveKeyText = '';
+      const apiKeyLabels = Array.from(document.querySelectorAll('*')).filter(
+        (el) => el.children.length === 0 && norm(el.textContent) === 'API Key',
+      );
+      for (const lbl of apiKeyLabels) {
+        const sib = lbl.nextElementSibling;
+        if (sib) { const t = norm(sib.textContent); if (t) { effectiveKeyText = t; break; } }
+      }
+      const out = document.getElementById('output-base-display');
+      const output_dir = out ? norm(out.textContent) : null;
+      // key_configured ONLY when the key-specific signals say so — NOT route tags.
+      const badgeOk = /已配置/.test(keyBadge) && !/未填写/.test(keyBadge);
+      const effOk = effectiveKeyText !== '' && !/未填写/.test(effectiveKeyText);
+      return {
+        key_configured: badgeOk || effOk,
+        key_badge: keyBadge,
+        effective_key_text: effectiveKeyText,
+        texts: [keyBadge, effectiveKeyText].filter(Boolean),
+        output_dir,
+      };
+    });
+  } catch (e) {
+    return { key_configured: false, key_badge: '', effective_key_text: '', texts: [], output_dir: null, error: String(e.message || e) };
+  }
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
@@ -594,48 +657,77 @@ async function main() {
   await screenshot(page, '01-workbench.png');
 
   try {
-    // ── Config: save the API Key through the UI, then VERIFY the closure ───────
+    // ── Config: REALLY save the API Key through the UI, then VERIFY the closure ─
     if (apiKey) {
       await page.goto(`${uiBase}/config`, { waitUntil: 'domcontentloaded' });
+      await page.waitForLoadState('networkidle', { timeout: 8000 }).catch(() => {});
+      // The Kie API Key input is the password field bound to providers.kie.api_key.
       const keyInput = await firstLocator(page, [
+        'input[data-testid="kie-api-key-input"]',
         'input[data-path="providers.kie.api_key"]',
-        'input[type="password"]',
       ]);
       if (!keyInput) {
         await captureDomSummary(page, 'config-dom-summary.json');
-        fail('config_input_missing', new Error('API Key input not found on /config'), apiKey);
+        fail('config_input_missing', new Error('Kie API Key input not found on /config'), apiKey);
         return;
       }
       await keyInput.waitFor({ state: 'visible', timeout: 20000 });
       await keyInput.fill(apiKey); // typed into a type=password field; never logged
-      const saveResp = page.waitForResponse((r) => r.url().includes('/config-save') && r.request().method() === 'POST', { timeout: 30000 });
-      await page.locator('#save-btn').click();
+      // Verify the value was actually set (length only — never the value).
+      report.api_key_input_filled = ((await keyInput.inputValue().catch(() => '')) || '').length > 0;
+
+      // Real click on 保存配置 → saveConfig() POSTs /config-save.
+      const saveResp = page.waitForResponse((r) => r.url().includes('/config-save') && r.request().method() === 'POST', { timeout: 25000 });
+      const saveBtn = await firstLocator(page, ['button[data-testid="save-config-btn"]', '#save-btn', 'button:has-text("保存配置")']);
+      await (saveBtn || page.locator('#save-btn')).click();
       const resp = await saveResp.catch(() => null);
-      report.api_key_saved_via_ui = Boolean(resp && resp.status() === 200);
+      let saveOk = false;
+      try { const b = resp ? JSON.parse(await resp.text()) : null; saveOk = Boolean(resp && resp.status() === 200 && (!b || b.ok !== false)); } catch { saveOk = Boolean(resp && resp.status() === 200); }
+      report.api_key_saved_via_ui = saveOk;
       report.stages.push('config_saved_via_ui');
 
-      // Reload (key field re-renders empty) then read the 已配置 badge from the DOM.
+      // saveConfig redirects to /config ~700ms after a successful save; let it
+      // settle, then load a fresh /config for the authoritative status read.
+      await page.waitForTimeout(1500).catch(() => {});
       await page.goto(`${uiBase}/config`, { waitUntil: 'domcontentloaded' });
-      const cfgText = await page.locator('body').innerText();
-      report.configured_reported_by_ui = /已配置/.test(cfgText);
-      report.output_dir = await page.locator('#output-base-display').first().innerText().catch(() => null);
-      report.output_dir_confirmed = Boolean(report.output_dir && report.output_dir.trim());
+
+      // KEY-specific UI status (NOT the "当前接口路由" route 已配置 tags).
+      const uiStatus = await readConfigStatus(page);
+      report.configured_reported_by_ui = uiStatus.key_configured;
+      report.visible_config_status_texts = uiStatus.texts;
+      report.output_dir = uiStatus.output_dir;
+      report.output_dir_confirmed = Boolean(uiStatus.output_dir && uiStatus.output_dir.trim());
       await screenshot(page, '02-config-configured.png');
 
-      // B8I closure: a 已配置 badge is NOT enough — verify the key actually
-      // persisted to local-config.json (presence only, never the value) AND is
-      // effective for the runtime (server /health/meta).
-      report.api_key_loaded_from_config = configKeyPresent();
+      // Authoritative readback: the actual config file (presence + masked hint only)
+      // and runtime effectiveness (server /health/meta).
+      const summary = configSummary();
+      report.redacted_config_summary = summary;
+      report.config_path = summary.config_path;
+      report.api_key_loaded_from_config = Boolean(summary.key_present);
       const meta = await httpGetJson(`http://127.0.0.1:${UI_PORT}/health/meta`);
       report.api_key_effective_for_runtime = Boolean(meta && meta.kie_api_key_configured);
       report.stages.push('configured_verified_via_ui');
 
-      // Mismatch: UI claims configured but the save did not actually take.
-      if (report.configured_reported_by_ui && !(report.api_key_loaded_from_config && report.api_key_effective_for_runtime)) {
+      // Gate: proceed to the brief ONLY when the REAL save closed THIS run. A
+      // pre-existing key in config + runtime effective is NOT enough — the current
+      // run must have typed the key (api_key_input_filled) AND the actual UI save
+      // must have succeeded (api_key_saved_via_ui, i.e. /config-save returned 200),
+      // in addition to the KEY-specific UI status, config key_present and runtime
+      // effective. Otherwise config_save_mismatch.
+      const closureOk = report.api_key_input_filled
+        && report.api_key_saved_via_ui
+        && report.configured_reported_by_ui
+        && report.api_key_loaded_from_config
+        && report.api_key_effective_for_runtime;
+      if (!closureOk) {
         report.config_save_mismatch = true;
+        await captureDomSummary(page, 'config-save-mismatch-dom.json');
+        await screenshot(page, '02b-config-save-mismatch.png');
         fail('config_save_mismatch', new Error(
-          `UI reported 已配置 but config not effective ` +
-          `(loaded_from_config=${report.api_key_loaded_from_config}, effective=${report.api_key_effective_for_runtime})`,
+          `config save not closed (configured_reported_by_ui=${report.configured_reported_by_ui}, ` +
+          `api_key_input_filled=${report.api_key_input_filled}, api_key_saved_via_ui=${report.api_key_saved_via_ui}, ` +
+          `key_present=${report.api_key_loaded_from_config}, effective=${report.api_key_effective_for_runtime})`,
         ), apiKey);
         return;
       }

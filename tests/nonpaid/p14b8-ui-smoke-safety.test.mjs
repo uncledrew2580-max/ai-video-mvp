@@ -496,11 +496,10 @@ test('B8I: report distinguishes UI-configured from actual config persistence', (
 
 test('B8I: config save is verified by config-file readback + runtime /health/meta (not route-only)', () => {
   const src = readUi();
-  assert.ok(/function configKeyPresent\(/.test(src), 'must read the saved key presence from local-config.json');
-  assert.ok(/local-config\.json/.test(src) && /providers\?\.\s*kie\?\.\s*api_key|providers\?\.kie\?\.api_key/.test(src),
-    'must check providers.kie.api_key presence');
+  assert.ok(/function configSummary\(/.test(src), 'must read the saved key presence from local-config.json');
+  assert.ok(/local-config\.json/.test(src) && /providers\?\.kie\?\.api_key/.test(src), 'must check providers.kie.api_key presence');
   assert.ok(/\/health\/meta/.test(src) && /kie_api_key_configured/.test(src), 'must verify runtime effectiveness via /health/meta');
-  assert.ok(/api_key_loaded_from_config = configKeyPresent\(\)/.test(src), 'api_key_loaded_from_config from the file readback');
+  assert.ok(/api_key_loaded_from_config = Boolean\(summary\.key_present\)/.test(src), 'api_key_loaded_from_config from the file readback');
 });
 
 test('B8I: a configured-vs-actual mismatch fails the run', () => {
@@ -512,9 +511,11 @@ test('B8I: a configured-vs-actual mismatch fails the run', () => {
 
 test('B8I: config-file readback records PRESENCE only — never the key value', () => {
   const src = readUi();
-  // configKeyPresent must return a boolean (.trim().length > 0), not store the key.
-  assert.ok(/return typeof k === 'string' && k\.trim\(\)\.length > 0/.test(src), 'configKeyPresent must return a boolean presence');
-  assert.ok(!/report\.[A-Za-z_]+\s*=\s*k\b/.test(src), 'the raw key must never be assigned to a report field');
+  // configSummary must return presence booleans + a masked hint, not store the key.
+  assert.ok(/key_present: key\.length > 0/.test(src), 'configSummary must return key presence as a boolean');
+  assert.ok(/key_masked: key \? maskKey\(key\)/.test(src), 'configSummary may only expose a masked key hint');
+  assert.ok(/function maskKey\(/.test(src) && /\.slice\(0, 3\)/.test(src), 'maskKey must mask to a short non-reversible hint');
+  assert.ok(!/report\.[A-Za-z_]+\s*=\s*key\b/.test(src), 'the raw key must never be assigned to a report field');
 });
 
 test('B8I: brief form is reached via /new-project and does NOT hard-wait field-0 on /', () => {
@@ -552,4 +553,86 @@ test('B8I: the brief still completes the full image-only flow (name/desc/market/
   assert.ok(/descInput.*\.fill\(|textarea\[name="field-1"\]/.test(src), 'fills description/selling points');
   assert.ok(/field-2/.test(src) && /field-3/.test(src), 'sets market + language');
   assert.ok(/setInputFiles\(/.test(src), 'uploads a test image');
+});
+
+// ── P14-B8M: config-save selector must read the KEY status, not route tags ─────
+
+test('B8M: configured_reported_by_ui reads the KEY status, not "当前接口路由" route tags', () => {
+  const src = readUi();
+  // The old loose `/已配置/.test(cfgText)` (matched route 已配置 tags) must be gone.
+  assert.ok(!/configured_reported_by_ui = \/已配置\/\.test\(cfgText\)/.test(src), 'must not match any 已配置 on the page');
+  assert.ok(/report\.configured_reported_by_ui = uiStatus\.key_configured/.test(src), 'must derive from the key-specific status');
+  assert.ok(/function readConfigStatus\(/.test(src), 'must read the key-specific config status');
+  // readConfigStatus targets the Kie API Key badge + the effective-config key.
+  assert.ok(/Kie API Key/.test(src) && /未填写/.test(src), 'must distinguish the Kie API Key 已配置/未填写 badge');
+  assert.ok(/当前接口路由|route tags/.test(src), 'must document the route-tag false positive it avoids');
+});
+
+test('B8M: the brief gate requires THIS-run save signals + UI/config/runtime closure', () => {
+  const src = readUi();
+  // closureOk must include the current-run save signals (input filled + /config-save
+  // 200), so a pre-existing key in config can never pass when THIS save failed.
+  const m = src.match(/const closureOk =([\s\S]{0,320}?);/);
+  assert.ok(m, 'closureOk must be defined');
+  const gate = m[1];
+  for (const sig of [
+    'report.api_key_input_filled',
+    'report.api_key_saved_via_ui',
+    'report.configured_reported_by_ui',
+    'report.api_key_loaded_from_config',
+    'report.api_key_effective_for_runtime',
+  ]) {
+    assert.ok(gate.includes(sig), `closureOk must include ${sig}`);
+  }
+  // It must be an AND of all signals (no ||), and fail config_save_mismatch.
+  assert.ok(!gate.includes('||'), 'closureOk must AND the signals, not OR them');
+  assert.ok(/if \(!closureOk\)[\s\S]{0,200}fail\('config_save_mismatch'/.test(src), 'a not-closed config must fail config_save_mismatch');
+});
+
+test('B8M: api_key_saved_via_ui=false (no /config-save 200) still fails even if a badge shows 已配置', () => {
+  const src = readUi();
+  // api_key_saved_via_ui is gated on the actual /config-save POST returning 200.
+  assert.ok(/api_key_saved_via_ui = saveOk/.test(src), 'api_key_saved_via_ui from the real /config-save response');
+  assert.ok(/resp\.status\(\) === 200/.test(src), 'must require a 200 from /config-save');
+  // The gate itself must reject the run when api_key_saved_via_ui is false.
+  assert.ok(/const closureOk =[\s\S]{0,320}report\.api_key_saved_via_ui/.test(src), 'closureOk must require api_key_saved_via_ui');
+  // And surface it in the diagnostic message.
+  assert.ok(/api_key_saved_via_ui=\$\{report\.api_key_saved_via_ui\}/.test(src), 'mismatch error must include api_key_saved_via_ui');
+});
+
+test('B8M: the real input is filled + verified and the real 保存配置 button is clicked', () => {
+  const src = readUi();
+  assert.ok(/input\[data-path="providers\.kie\.api_key"\]/.test(src), 'must fill the real Kie API Key input');
+  assert.ok(/\.fill\(apiKey\)/.test(src), 'must really type the key');
+  assert.ok(/api_key_input_filled = /.test(src) && /\.inputValue\(\)/.test(src), 'must verify the input value was actually set');
+  assert.ok(/#save-btn|save-config-btn|保存配置/.test(src), 'must click the real 保存配置 button');
+});
+
+test('B8M: redacted_config_summary exposes presence + masked hint only (no plaintext key)', () => {
+  const src = readUi();
+  for (const f of ['redacted_config_summary', 'config_path', 'visible_config_status_texts', 'api_key_input_filled']) {
+    assert.ok(src.includes(f), `report must include ${f}`);
+  }
+  for (const f of ['key_present', 'key_masked', 'base_url_present', 'effective_route_present']) {
+    assert.ok(src.includes(f), `config summary must include ${f}`);
+  }
+  // Must NOT copy the raw local-config or the raw key anywhere.
+  assert.ok(!/copyFileSync\([^)]*local-config/.test(src), 'must not copy raw local-config.json');
+  assert.ok(!/redacted_config_summary\s*=\s*cfg\b/.test(src), 'must not put the raw config object in the report');
+});
+
+test('B8M: config_save_mismatch failure captures DOM summary + screenshot diagnostics', () => {
+  const src = readUi();
+  assert.ok(/captureDomSummary\(page, 'config-save-mismatch-dom\.json'\)/.test(src), 'must dump a DOM summary on mismatch');
+  assert.ok(/02b-config-save-mismatch\.png/.test(src), 'must screenshot the mismatch state');
+  assert.ok(/visible_config_status_texts = uiStatus\.texts/.test(src), 'must record the visible on-page status texts');
+});
+
+test('B8M: image-only boundaries + no-model still hold in the config path', () => {
+  const src = readUi();
+  // The brief navigation (generation entry) must come AFTER the config closure gate.
+  const cfgIdx = src.indexOf("fail('config_save_mismatch'");
+  const briefNavIdx = src.indexOf('await page.goto(`${uiBase}/new-project`');
+  assert.ok(cfgIdx > 0 && briefNavIdx > cfgIdx, 'the brief (generation) must come AFTER the config closure gate');
+  assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'stop-proof flags remain true');
 });
