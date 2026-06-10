@@ -44,9 +44,12 @@ import zlib from 'node:zlib';
 import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { redactObject, redactString } from '../../app-server/shared/redact.mjs';
 import { runSqlite } from '../../lib/sqlite-exec.mjs';
 import { n8nDbReadinessReport } from './n8n-db-ready.mjs';
+
+const _require = createRequire(import.meta.url);
 
 // Expose guard stubs so they are importable; calling them intentionally blocks the op.
 export { guardFinalMerge, guardReviewRerunShot, guardReviewSubmit, guardReviewSubmitVeoV2, guardVeo, guardVideoGeneration };
@@ -160,6 +163,20 @@ const report = {
   output_dir_confirmed: false,
   workflow_presence: { WF01: false, WF02: false, WF02a: false, WF02b: false, WF03: false },
   workflow_presence_all: false,
+  // B8V: product-image UI upload + n8n/WF01 binary presence diagnostics
+  product_image_upload_attempted: false,
+  product_image_input_matched: false,
+  product_image_file_path: null,        // repo fixture path (not a secret)
+  product_image_attached_to_brief: false, // locator.files actually has the file
+  brief_submit_request_seen: false,
+  brief_submit_status: null,
+  n8n_binary_present: null,             // n8n binaryData dir exists with >=1 file
+  wf01_binary_present: null,            // latest WF01 execution carries product-image binary/paths
+  wf01_binary_keys: [],                 // binary key NAMES only (no data)
+  wf01_product_image_count: null,
+  wf01_product_image_local_paths_exist: [], // booleans only (no paths/base64)
+  n8n_binary_storage_summary: null,     // { dir_exists, file_count } only
+  binary_restore_error: null,           // redacted n8n "restore binary" error if any
   // full-mode pipeline milestones
   brief_submitted_via_ui: false,
   concept_ready_via_ui: false,
@@ -313,6 +330,66 @@ async function readConfigStatus(page) {
   } catch (e) {
     return { key_configured: false, key_badge: '', effective_key_text: '', texts: [], output_dir: null, error: String(e.message || e) };
   }
+}
+
+// B8V: read-only n8n / WF01 product-image binary diagnostics. Summarizes ONLY
+// key names, counts, booleans and redacted errors — never image base64, paths, or
+// secrets. Best-effort: any failure leaves fields null and never throws upward.
+function collectWf01BinaryDiagnostics(report) {
+  const dataRoot = path.join(userSupportDir(), 'workflow-data', '.n8n');
+  const dbPath = path.join(dataRoot, 'database.sqlite');
+
+  // 1) n8n binary storage dir summary (existence + count only).
+  let dirExists = false; let fileCount = 0;
+  try {
+    const binDir = path.join(dataRoot, 'binaryData');
+    if (fs.existsSync(binDir)) {
+      dirExists = true;
+      const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { if (e.isDirectory()) walk(path.join(d, e.name)); else fileCount++; } };
+      walk(binDir);
+    }
+  } catch {}
+  report.n8n_binary_storage_summary = { dir_exists: dirExists, file_count: fileCount };
+  report.n8n_binary_present = dirExists && fileCount > 0;
+
+  if (!fs.existsSync(dbPath)) {
+    report.wf01_binary_present = false;
+    report.binary_restore_error = report.binary_restore_error || 'wf01_execution_db_not_found';
+    return;
+  }
+
+  // 2) latest WF01 (concept) execution data — WF01 id, else most recent execution.
+  let dataStr = null;
+  try {
+    const wf01Id = 'rKHHjD2QBlL6EhaM';
+    let raw = runSqlite(['-json', dbPath,
+      `SELECT ed.data AS data FROM execution_data ed JOIN execution_entity ee ON ee.id = ed."executionId" WHERE ee."workflowId"='${wf01Id}' ORDER BY ee.id DESC LIMIT 1;`,
+    ], { encoding: 'utf8' });
+    let rows = raw ? JSON.parse(raw) : [];
+    if (!rows.length) {
+      raw = runSqlite(['-json', dbPath, 'SELECT data FROM execution_data ORDER BY "executionId" DESC LIMIT 1;'], { encoding: 'utf8' });
+      rows = raw ? JSON.parse(raw) : [];
+    }
+    dataStr = rows.length ? String(rows[0].data || '') : null;
+  } catch (e) { report.binary_restore_error = report.binary_restore_error || redactString(String(e.message || e)).slice(0, 200); }
+
+  if (!dataStr) { report.wf01_binary_present = false; return; }
+
+  // 3) parse (flatted if available) then scan for product-image binary key NAMES,
+  //    the image count, and local-path EXISTENCE booleans — never the values.
+  let text = dataStr;
+  try { const flatted = _require('flatted'); text = JSON.stringify(flatted.parse(dataStr)); } catch {}
+  report.wf01_binary_keys = [...new Set((text.match(/"(product_images_\d+|image_\d+|data\d+)"/g) || []).map((m) => m.replace(/"/g, '')))].slice(0, 20);
+  const cm = text.match(/"product_image_count"\s*:\s*"?(\d+)"?/) || text.match(/"image_count"\s*:\s*"?(\d+)"?/);
+  report.wf01_product_image_count = cm ? Number(cm[1]) : null;
+  const exists = [];
+  for (const m of [...text.matchAll(/"(?:image_\d+_path|product_image_local_path[s]?)"\s*:\s*"([^"]+)"/g)].slice(0, 8)) {
+    try { exists.push(fs.existsSync(m[1])); } catch { exists.push(false); }
+  }
+  report.wf01_product_image_local_paths_exist = exists;
+  const errM = text.match(/(Failed to restore binary data[^"\\]*|No such file[^"\\]*)/i);
+  if (errM && !report.binary_restore_error) report.binary_restore_error = redactString(errM[1]).slice(0, 200);
+  report.wf01_binary_present = report.wf01_binary_keys.length > 0 || (report.wf01_product_image_count || 0) > 0 || exists.some(Boolean);
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
@@ -933,26 +1010,66 @@ async function main() {
     // Product name (required); description / selling points (optional); market +
     // language already default to "United States" / "English" — set them anyway
     // so the brief is explicit; then upload a test image.
-    await nameInput.fill('Smoke Test Product — white circle on blue');
+    await nameInput.fill('Smoke Test Product — telescopic fishing rod');
     const descInput = await firstLocator(page, ['textarea[name="field-1"]', 'textarea']);
-    if (descInput) await descInput.fill('Image-only smoke: simple white circle on a solid blue background.').catch(() => {});
+    if (descInput) await descInput.fill('Image-only smoke: telescopic fishing rod product photo with segmented dark rods and metal caps.').catch(() => {});
     const marketInput = await firstLocator(page, ['input[name="field-2"]']);
     if (marketInput) await marketInput.fill('United States').catch(() => {});
     const langInput = await firstLocator(page, ['input[name="field-3"]']);
     if (langInput) await langInput.fill('English').catch(() => {});
-    const samplePng = path.join(os.tmpdir(), `ui-smoke-product-${Date.now()}.png`);
-    fs.writeFileSync(samplePng, makeSolidPng(256, 256, [60, 120, 220]));
+    // B8V: upload a FIXED, repo-bundled product image (a real photo, derived from a
+    // provided WebP and stored as a small JPEG) through the real file input — not a
+    // dynamic blank PNG. This gives WF01/WF02b stable, realistic binary input.
+    const productImage = path.join(ROOT, 'tests', 'fixtures', 'ui-smoke-product.jpg');
+    report.product_image_file_path = path.relative(ROOT, productImage);
+    if (!fs.existsSync(productImage)) {
+      fail('product_image_fixture_missing', new Error(`fixture not found: ${report.product_image_file_path}`), apiKey);
+      return;
+    }
     const fileInput = await firstLocator(page, ['input[type="file"][name="field-5"]', 'input[type="file"]']);
+    report.product_image_input_matched = Boolean(fileInput);
     if (!fileInput) {
       await captureDomSummary(page, 'brief-form-no-file-input.json');
       fail('brief_form_missing', new Error('product image file input not found on /new-project'), apiKey);
       return;
     }
-    await fileInput.setInputFiles(samplePng);
+    report.product_image_upload_attempted = true;
+    await fileInput.setInputFiles(productImage);
+    // Verify the file is REALLY attached to the input (name/type/size present) —
+    // never read the bytes; only metadata.
+    const attached = await fileInput.evaluate((el) => {
+      const f = el.files && el.files[0];
+      return f ? { count: el.files.length, name: f.name, type: f.type, size: f.size } : { count: 0 };
+    }).catch(() => ({ count: 0 }));
+    report.product_image_attached_to_brief = Boolean(attached && attached.count > 0 && attached.size > 0);
+    if (!report.product_image_attached_to_brief) {
+      await captureDomSummary(page, 'brief-image-not-attached.json');
+      fail('product_image_not_attached', new Error('product image did not attach to the file input (files.count=0)'), apiKey);
+      return;
+    }
     await screenshot(page, '04c-brief-filled.png');
+
+    // Submit the brief and OBSERVE the /submit-product response — if it does not
+    // accept (no 2xx/redirect to /submitted), fail BEFORE blaming WF01.
+    const submitResp = page.waitForResponse(
+      (r) => /\/submit-product\b/.test(r.url()) && r.request().method() === 'POST',
+      { timeout: 60000 },
+    );
     const submitBtn = await firstLocator(page, ['#product-submit-button', 'button[type="submit"]']);
     await (submitBtn || page.locator('#product-submit-button')).click();
+    const sResp = await submitResp.catch(() => null);
+    report.brief_submit_request_seen = Boolean(sResp);
+    report.brief_submit_status = sResp ? sResp.status() : null;
     await page.waitForURL(/\/submitted/, { timeout: 60000 }).catch(() => {});
+    const reachedSubmitted = /\/submitted/.test(page.url());
+    if (!reachedSubmitted && !(sResp && sResp.status() >= 200 && sResp.status() < 400)) {
+      await captureDomSummary(page, 'brief-submit-not-accepted.json');
+      await screenshot(page, '04b-brief-submit-not-accepted.png');
+      fail('brief_submit_not_accepted', new Error(
+        `/submit-product not accepted (request_seen=${report.brief_submit_request_seen}, status=${report.brief_submit_status})`,
+      ), apiKey);
+      return;
+    }
     let since = '0';
     try { since = new URL(page.url()).searchParams.get('since') || '0'; } catch {}
     report.brief_submitted_via_ui = true;
@@ -1021,11 +1138,15 @@ async function main() {
       } else { report.image_ok = false; report.errors.push('script-review page / #confirm-script-btn not reached'); }
     } else { report.image_ok = false; report.errors.push('WF01 concept did not become selectable before timeout'); }
   } catch (e) {
+    try { collectWf01BinaryDiagnostics(report); } catch {}
     fail('ui_pipeline', e, apiKey);
     return;
   }
 
   // ── FULL-mode verdict ───────────────────────────────────────────────────────
+  // B8V: now that WF01 has executed (succeeded or failed), capture its product-image
+  // binary presence so a storyboard miss can be traced to upload/binary, not config.
+  try { collectWf01BinaryDiagnostics(report); } catch (e) { report.binary_restore_error = report.binary_restore_error || redactString(String(e.message || e)).slice(0, 200); }
   if (report.forbidden_requests_blocked.length > 0) { fail('forbidden_request', new Error('forbidden video/Veo request attempted'), apiKey); return; }
   if (report.storyboard_image_generated_via_ui === true && report.image_ok === true) {
     report.status = 'passed';

@@ -927,3 +927,80 @@ test('B8T: harder diagnostics fields are present in the smoke report', () => {
   assert.ok(/page\.on\('pageerror'/.test(src) && /page\.on\('console'/.test(src), 'must capture renderer console errors');
   assert.ok(/redactString/.test(src), 'console errors must be redacted (no secret leak)');
 });
+
+// ── P14-B8V: fixed product-image fixture + WF01/n8n binary diagnostics ─────────
+
+const FIXTURE = path.join(ROOT, 'tests', 'fixtures', 'ui-smoke-product.jpg');
+
+test('B8V: a fixed product-image fixture exists and is a real jpg/png (not temp-only)', () => {
+  assert.ok(fs.existsSync(FIXTURE), `missing fixture ${FIXTURE}`);
+  const b = fs.readFileSync(FIXTURE);
+  const isJpeg = b[0] === 0xFF && b[1] === 0xD8;
+  const isPng = b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47;
+  assert.ok(isJpeg || isPng, 'fixture must be a real JPEG or PNG');
+  assert.ok(b.length > 2000 && b.length < 600 * 1024, `fixture should be small but real (got ${b.length} bytes)`);
+});
+
+test('B8V: the smoke uploads the FIXED fixture through the real file input (no dynamic-only temp PNG)', () => {
+  const src = readUi();
+  assert.ok(/tests', 'fixtures', 'ui-smoke-product\.jpg'/.test(src) || /ui-smoke-product\.jpg/.test(src), 'must reference the repo fixture');
+  assert.ok(/input\[type="file"\]\[name="field-5"\]/.test(src), 'must target the field-5 file input');
+  assert.ok(/setInputFiles\(productImage\)/.test(src), 'must setInputFiles the fixture');
+  // The brief upload must NOT depend on the dynamic generated PNG anymore.
+  assert.ok(!/setInputFiles\(samplePng\)/.test(src), 'must not upload the dynamic samplePng for the brief');
+});
+
+test('B8V: setInputFiles is verified (files.count>0 + name/type/size) and fails early if not attached', () => {
+  const src = readUi();
+  assert.ok(/el\.files && el\.files\[0\]/.test(src) && /size: f\.size/.test(src), 'must verify the attached file metadata');
+  assert.ok(/product_image_attached_to_brief = /.test(src), 'must record product_image_attached_to_brief');
+  assert.ok(/fail\('product_image_not_attached'/.test(src), 'must fail early when not attached');
+});
+
+test('B8V: /submit-product response is observed and a non-accept fails before WF01', () => {
+  const src = readUi();
+  assert.ok(/waitForResponse\([\s\S]{0,120}\/submit-product/.test(src), 'must observe the /submit-product response');
+  assert.ok(/brief_submit_status = sResp/.test(src), 'must record the submit status');
+  assert.ok(/fail\('brief_submit_not_accepted'/.test(src), 'must fail before WF01 if not accepted');
+});
+
+test('B8V: report carries the product-image + WF01/n8n binary diagnostic fields', () => {
+  const src = readUi();
+  for (const f of [
+    'product_image_upload_attempted', 'product_image_input_matched', 'product_image_file_path',
+    'product_image_attached_to_brief', 'brief_submit_request_seen', 'brief_submit_status',
+    'n8n_binary_present', 'wf01_binary_present', 'wf01_binary_keys', 'wf01_product_image_count',
+    'wf01_product_image_local_paths_exist', 'n8n_binary_storage_summary', 'binary_restore_error',
+  ]) {
+    assert.ok(src.includes(f), `report must include ${f}`);
+  }
+});
+
+test('B8V: WF01 binary diagnostics are READ-ONLY and never emit base64/secrets', () => {
+  const src = readUi();
+  const fn = src.slice(src.indexOf('function collectWf01BinaryDiagnostics'), src.indexOf('// ── Diagnostics'));
+  assert.ok(fn, 'collectWf01BinaryDiagnostics must exist');
+  // Read-only: only SELECT against the n8n DB — never INSERT/UPDATE/DELETE.
+  assert.ok(/SELECT /.test(fn), 'must SELECT execution data');
+  assert.ok(!/\b(INSERT|UPDATE|DELETE|DROP)\b/.test(fn), 'must not write to the n8n DB');
+  // Keys = NAMES only; paths -> existence booleans; counts numeric; errors redacted.
+  assert.ok(/wf01_binary_keys = \[\.\.\.new Set/.test(fn), 'keys are names only');
+  assert.ok(/fs\.existsSync\(m\[1\]\)/.test(fn) && /push\((?:fs\.existsSync|false)/.test(fn), 'paths recorded as existence booleans');
+  assert.ok(/redactString/.test(fn), 'binary restore errors must be redacted');
+  // Must NOT push raw base64 / data values into the report.
+  assert.ok(!/base64/.test(fn), 'must not reference base64 values');
+  // wf01_binary_present is a BOOLEAN — never a string sentinel (db-missing => false +
+  // the reason goes into binary_restore_error).
+  assert.ok(!/wf01_binary_present\s*=\s*['"]/.test(fn), 'wf01_binary_present must never be assigned a string');
+  assert.ok(/wf01_binary_present = false;[\s\S]{0,200}binary_restore_error = [\s\S]{0,80}wf01_execution_db_not_found/.test(fn),
+    'a missing execution DB must set wf01_binary_present=false + a binary_restore_error reason');
+});
+
+test('B8V: still no direct config write / no Veo/video/final / no fake success', () => {
+  const src = readUi();
+  assert.ok(!/writeFileSync\([^)]*local-config\.json/.test(src), 'no direct local-config write');
+  assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'stop-proof flags remain true');
+  // The fixture upload path does not call /config-save or any webhook directly for success.
+  const fn = src.slice(src.indexOf('upload a FIXED'), src.indexOf('collectWf01BinaryDiagnostics(report)'));
+  assert.ok(!/\/config-save/.test(fn) && !/webhook/.test(fn), 'brief upload must not call /config-save or a webhook directly');
+});
