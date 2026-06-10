@@ -161,11 +161,29 @@ jobs:
         shell: pwsh
         run: node scripts/win/n8n-launch-smoke.mjs "$env:AI_VIDEO_STAGE_DIR/resources/runtime"
 
+      # Cache Playwright's browser binaries (Windows path). Electron automation
+      # doesn't download a browser, but the cache is keyed by OS + Playwright
+      # version + lockfile hash and a miss still downloads — it never blocks.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\ms-playwright
+          key: ${{ runner.os }}-playwright-1.49.0-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-playwright-1.49.0-
+            ${{ runner.os }}-playwright-
+
       # Playwright (Electron automation only — no browser download needed).
-      # --no-save keeps package.json / lockfile unchanged.
-      - name: Install Playwright (no-save)
+      # --no-save keeps package.json / lockfile unchanged. Retries on transient npm
+      # network errors (ECONNRESET/ETIMEDOUT/...) so a single hiccup does not skip
+      # the whole UI smoke (B8R). On exhausting retries it fails clearly as
+      # failed_stage=install_playwright_dependency (never silently skips).
+      - name: Install Playwright (no-save, retry)
         shell: pwsh
-        run: npm install --no-save playwright@^1.49.0
+        env:
+          PLAYWRIGHT_SPEC: playwright@^1.49.0
+          PLAYWRIGHT_INSTALL_ATTEMPTS: '4'
+        run: node scripts/win/install-playwright-with-retry.mjs
 
       # The UI-driven smoke: drives AI Video.exe through Playwright. Default mode
       # is 'diagnostic' (startup + diagnostics ONLY, no image generation). The
@@ -191,3 +209,21 @@ jobs:
             smoke-report.json
             smoke-diagnostics/
           if-no-files-found: warn
+
+      # Make the result unambiguous: when no smoke-report exists the UI smoke body
+      # never ran (e.g. a pre-smoke step failed) — say so explicitly instead of
+      # leaving an empty/misleading artifact. When it does exist, surface the verdict.
+      - name: Summarize UI smoke result
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path 'smoke-report.json') {
+            try {
+              $r = Get-Content 'smoke-report.json' -Raw | ConvertFrom-Json
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### UI smoke ran`n- status: $($r.status)`n- failed_stage: $($r.failed_stage)`n- app_started: $($r.app_started) / window_state: $($r.window_state)`n- REAL_SMOKE_SCOPE=image_only, DISABLE_VIDEO_GENERATION=true (no Veo/video/final)."
+            } catch {
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### UI smoke produced a report that could not be parsed."
+            }
+          } else {
+            Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### UI smoke not started`n- No smoke-report.json — the UI smoke body did not run (a pre-smoke step failed).`n- AI Video.exe was NOT launched; no UI-driven config-save or image generation.`n- No model call (Gemini / Nano Banana / Veo); no video clips; no final merge.`n- REAL_SMOKE_SCOPE=image_only, DISABLE_VIDEO_GENERATION=true."
+          }

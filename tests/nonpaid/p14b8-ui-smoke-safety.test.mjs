@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { test } from 'node:test';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -83,9 +83,11 @@ test('workflow runs the UI smoke runner and preserves required checks', () => {
   }
 });
 
-test('workflow installs Playwright without modifying the lockfile', () => {
+test('workflow installs Playwright without modifying the lockfile (via the retry helper)', () => {
   const yml = readWf();
-  assert.ok(/npm install --no-save playwright/.test(yml), 'must install playwright with --no-save');
+  assert.ok(/install-playwright-with-retry\.mjs/.test(yml), 'must install playwright via the retry helper');
+  const helper = fs.readFileSync(path.join(ROOT, 'scripts', 'win', 'install-playwright-with-retry.mjs'), 'utf8');
+  assert.ok(/--no-save/.test(helper), 'the helper must use --no-save (no lockfile change)');
 });
 
 test('B8C: workflow defaults to diagnostic mode (no image generation) and passes UI_SMOKE_MODE', () => {
@@ -767,4 +769,68 @@ test('B8Q: the fix is frontend-only handler binding — save still posts the rea
   assert.ok(m, 'the B8Q binding block must be present');
   assert.ok(!/reviewSubmitVeoV2|kie_veo|webhook\/|tasks\.\w+\.model\s*=/.test(m[0]),
     'the B8Q binding block must not touch model-route/webhook/schema');
+});
+
+// ── P14-B8R1: Playwright install retry + cache + "did-not-run" summary ─────────
+
+const PW_RETRY = path.join(ROOT, 'scripts', 'win', 'install-playwright-with-retry.mjs');
+const readRetry = () => fs.readFileSync(PW_RETRY, 'utf8');
+
+test('B8R1: retry helper exists and passes node --check', () => {
+  assert.ok(fs.existsSync(PW_RETRY), `missing ${PW_RETRY}`);
+  assert.doesNotThrow(() => execFileSync(process.execPath, ['--check', PW_RETRY], { stdio: 'pipe' }));
+});
+
+test('B8R1: helper retries >=3 attempts and classifies transient network errors', async () => {
+  const m = await import(pathToFileURL(PW_RETRY).href);
+  assert.ok(m.MAX_ATTEMPTS >= 3, 'must allow at least 3 attempts');
+  for (const t of ['npm error code ECONNRESET', 'ETIMEDOUT', 'getaddrinfo ENOTFOUND registry.npmjs.org', 'socket hang up', 'npm error 503 Service Unavailable', 'request to https://registry.npmjs.org/playwright failed']) {
+    assert.equal(m.isTransient(t), true, `must treat as transient: ${t}`);
+  }
+  for (const nt of ['npm error 404 Not Found', 'npm warn cleanup EPERM operation not permitted', 'No matching version found']) {
+    assert.equal(m.isTransient(nt), false, `must NOT treat as transient: ${nt}`);
+  }
+});
+
+test('B8R1: helper fails clearly as install_playwright_dependency + writes a no-start summary', () => {
+  const src = readRetry();
+  assert.ok(/FAILED_STAGE = 'install_playwright_dependency'/.test(src), 'must name the failed_stage');
+  assert.ok(/process\.exit\(1\)/.test(src), 'must exit non-zero on exhausted retries (no silent skip)');
+  assert.ok(/GITHUB_STEP_SUMMARY/.test(src) && /UI smoke did not start/.test(src), 'must write a step summary');
+  assert.ok(/AI Video\.exe was NOT launched/.test(src) && /no video clips; no final merge/.test(src),
+    'summary must state no app launch / no model / no Veo/video/final');
+  // Uses --no-save (local, not global) and prefers an already-installed playwright.
+  assert.ok(/'--no-save'/.test(src) && /require\.resolve\('playwright'\)/.test(src),
+    'must use --no-save and skip when already installed');
+});
+
+test('B8R1: workflow caches Playwright browsers keyed by OS + version + lockfile', () => {
+  const yml = readWf();
+  assert.ok(/uses: actions\/cache@v4/.test(yml), 'must use actions/cache');
+  assert.ok(/ms-playwright/.test(yml), 'must cache the ms-playwright browsers path');
+  assert.ok(/key: \$\{\{ runner\.os \}\}-playwright-[\d.]+-\$\{\{ hashFiles\('package-lock\.json'\) \}\}/.test(yml),
+    'cache key must include OS + Playwright version + lockfile hash');
+  // A miss must still allow install (the install step is unconditional after cache).
+  const cacheIdx = yml.indexOf('Cache Playwright browsers');
+  const installIdx = yml.indexOf('Install Playwright (no-save, retry)');
+  assert.ok(cacheIdx > 0 && installIdx > cacheIdx, 'install runs after the cache restore (miss still downloads)');
+});
+
+test('B8R1: a no-report run is summarized as "UI smoke not started" (not misleading)', () => {
+  const yml = readWf();
+  assert.ok(/Summarize UI smoke result/.test(yml), 'must summarize the result');
+  assert.ok(/UI smoke not started/.test(yml) && /AI Video\.exe was NOT launched/.test(yml),
+    'no-report case must say UI smoke not started + no app launch');
+  assert.ok(/No model call \(Gemini \/ Nano Banana \/ Veo\); no video clips; no final merge/.test(yml),
+    'must state no model / no Veo/video/final when not started');
+  // Upload step stays non-failing when no report exists.
+  assert.ok(/if-no-files-found: warn/.test(yml), 'upload must warn (not fail/empty) when no report');
+});
+
+test('B8R1: image-only boundaries + dispatch-only trigger are preserved', () => {
+  const yml = readWf();
+  assert.ok(/REAL_SMOKE_SCOPE: image_only/.test(yml) && /DISABLE_VIDEO_GENERATION: 'true'/.test(yml), 'image-only env preserved');
+  assert.ok(/workflow_dispatch/.test(yml) && !/\n\s*push:/.test(yml) && !/\n\s*schedule:/.test(yml), 'still dispatch-only');
+  // The UI smoke runner + the secret-only key path are unchanged.
+  assert.ok(/ui-smoke-image-only\.mjs/.test(yml) && /secrets\.AI_VIDEO_API_KEY/.test(yml), 'smoke runner + secret-only key intact');
 });
