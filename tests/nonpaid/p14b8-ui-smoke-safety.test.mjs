@@ -15,9 +15,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const WORKFLOW = path.join(ROOT, '.github', 'workflows', 'windows-ui-smoke-image-only.yml');
 const UI_SCRIPT = path.join(ROOT, 'scripts', 'win', 'ui-smoke-image-only.mjs');
 const SMOKE_GUARD = path.join(ROOT, 'scripts', 'win', 'smoke-guard.mjs');
+const SERVE = path.join(ROOT, '版本测试', 'serve-review-assets.mjs');
 
 const readWf = () => fs.readFileSync(WORKFLOW, 'utf8');
 const readUi = () => fs.readFileSync(UI_SCRIPT, 'utf8');
+const readServe = () => fs.readFileSync(SERVE, 'utf8');
 
 // ── Workflow trigger / scope ──────────────────────────────────────────────────
 
@@ -707,4 +709,62 @@ test('B8O: the save link is the real UI click — no direct config write / no sy
   assert.ok(!/writeFileSync\([^)]*local-config\.json/.test(src), 'must never write local-config.json directly');
   assert.ok(!/api_key_saved_via_ui = true\b/.test(src), 'must never hardcode save success');
   assert.ok(!/page\.evaluate\([^)]*saveConfig\(/.test(src), 'must not call saveConfig() programmatically to fake the save');
+});
+
+// ── P14-B8Q: config-save handler binding (frontend) reliably triggers the save ─
+
+test('B8Q: the config page exposes window.saveConfig (not only an inline-script global)', () => {
+  const src = readServe();
+  assert.ok(/window\.saveConfig = saveConfig/.test(src), 'must explicitly expose window.saveConfig');
+  // The packaged renderer did not promote inline declarations to window — explicit
+  // exposure keeps the handler resolvable + detectable.
+  assert.ok(/window\.testConnection = testConnection/.test(src), 'must expose the other config handlers too');
+});
+
+test('B8Q: the save button is bound via addEventListener (closure ref, not only inline onclick)', () => {
+  const src = readServe();
+  assert.ok(/addEventListener\('click', \(e\) => saveConfig\(e\)\)/.test(src), 'must bind the save click via addEventListener');
+  assert.ok(/dataset\.boundSave/.test(src) && /DOMContentLoaded/.test(src), 'must bind on DOMContentLoaded with an idempotent marker');
+  // The save button must NOT rely solely on an inline onclick="saveConfig(...)".
+  assert.ok(!/id="save-btn"[^>]*onclick="saveConfig/.test(src), 'save button must not depend on inline onclick=saveConfig');
+});
+
+test('B8Q: the config page has testability ids for the key input + save button', () => {
+  const src = readServe();
+  assert.ok(/data-testid="kie-api-key-input"/.test(src), 'API Key input must have data-testid');
+  assert.ok(/data-testid="save-config-button"/.test(src), 'save button must have data-testid');
+  // The API Key input keeps its data-path binding for the save payload.
+  assert.ok(/data-testid="kie-api-key-input" data-path="providers\.kie\.api_key"/.test(src), 'key input keeps its data-path');
+});
+
+test('B8Q: the smoke targets the new data-testid and treats addEventListener binding as handler-present', () => {
+  const src = readUi();
+  assert.ok(/button\[data-testid="save-config-button"\]/.test(src), 'smoke must target data-testid="save-config-button"');
+  assert.ok(/input\[data-testid="kie-api-key-input"\]/.test(src), 'smoke must target data-testid="kie-api-key-input"');
+  // save_handler_present accepts the exposed window.saveConfig OR the bound marker.
+  assert.ok(/typeof window\.saveConfig === 'function'/.test(src), 'still checks window.saveConfig');
+  assert.ok(/data-bound-save="1"/.test(src), 'also accepts the addEventListener binding marker');
+});
+
+test('B8Q: the smoke gate still requires handler-present + POST + 2xx + key closure before brief', () => {
+  const src = readUi();
+  // No /config-save POST => action_not_triggered (handler-present is also reported).
+  assert.ok(/fail\('config_save_action_not_triggered'/.test(src), 'no POST => action_not_triggered');
+  assert.ok(/save_handler_present=\$\{report\.save_handler_present\}/.test(src), 'must report save_handler_present in the failure');
+  // The five-signal closure (incl. the current-run save) still gates the brief.
+  const m = src.match(/const closureOk =([\s\S]{0,320}?);/);
+  assert.ok(m && /report\.api_key_saved_via_ui/.test(m[1]) && /report\.api_key_loaded_from_config/.test(m[1]) && /report\.api_key_effective_for_runtime/.test(m[1]),
+    'closure must still require save + config key_present + runtime effective');
+});
+
+test('B8Q: the fix is frontend-only handler binding — save still posts the real form payload', () => {
+  const src = readServe();
+  // The save still POSTs /config-save with the collected form payload (no bypass).
+  assert.ok(/fetch\('\/config-save'/.test(src), 'save must still POST /config-save');
+  assert.ok(/collectConfigBody\(\)/.test(src), 'must send the collected UI form payload');
+  // The B8Q binding block itself only wires up handlers — no model/route/webhook tokens.
+  const m = src.match(/window\.saveConfig = saveConfig;[\s\S]{0,800}?\}\)\(\);/);
+  assert.ok(m, 'the B8Q binding block must be present');
+  assert.ok(!/reviewSubmitVeoV2|kie_veo|webhook\/|tasks\.\w+\.model\s*=/.test(m[0]),
+    'the B8Q binding block must not touch model-route/webhook/schema');
 });

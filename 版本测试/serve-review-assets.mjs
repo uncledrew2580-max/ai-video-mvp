@@ -5354,7 +5354,7 @@ function renderConfigPage(saved = false, error = '') {
       <p class="muted" style="margin:0 0 14px;font-size:13px;">填写 API Key 即可启用全部功能。前往 <strong>kie.ai</strong> 获取你的 Key。</p>
       <div class="form-row" style="margin-bottom:0;">
         <label class="form-label">API Key</label>
-        <input type="password" data-path="providers.kie.api_key" value="" placeholder="${hasKieKey ? '已配置（粘贴新 Key 可更新，留空则不变）' : '粘贴你的 Kie API Key'}" autocomplete="off" />
+        <input type="password" data-testid="kie-api-key-input" data-path="providers.kie.api_key" value="" placeholder="${hasKieKey ? '已配置（粘贴新 Key 可更新，留空则不变）' : '粘贴你的 Kie API Key'}" autocomplete="off" />
       </div>
       <!-- Hidden locked model values — always submitted with save -->
       <input type="hidden" data-path="providers.kie.base_url" value="${htmlEscape(KIE_CONSTANTS.base_url)}" />
@@ -5487,7 +5487,7 @@ function renderConfigPage(saved = false, error = '') {
     </div>
 
     <div class="btn-row" style="margin-top:20px;">
-      <button class="btn btn-primary" id="save-btn" onclick="saveConfig(event)" style="padding:9px 24px;">保存配置</button>
+      <button class="btn btn-primary" id="save-btn" data-testid="save-config-button" style="padding:9px 24px;">保存配置</button>
       <a class="btn btn-secondary" href="/">取消</a>
     </div>
   </main>
@@ -5634,6 +5634,27 @@ function renderConfigPage(saved = false, error = '') {
       }
     }
   }
+  // P14-B8Q: bind the save button via addEventListener (closure reference — no
+  // global lookup), and explicitly expose the handlers on window. The packaged
+  // Windows Electron renderer did not promote these inline-script function
+  // declarations to window globals, so the old inline onclick="saveConfig(event)"
+  // could not resolve saveConfig and the click silently no-op'd (B8P:
+  // save_handler_present=false, no POST /config-save). addEventListener does not
+  // depend on a window global, and the explicit exposure keeps the remaining
+  // inline onclicks (test/choose/output) working and makes the handler detectable.
+  window.saveConfig = saveConfig;
+  window.testConnection = testConnection;
+  window.chooseDir = chooseDir;
+  window.outputFolderAction = outputFolderAction;
+  window.syncTextModel = syncTextModel;
+  (function bindConfigSaveHandler() {
+    const bind = () => {
+      const sb = document.querySelector('[data-testid="save-config-button"]') || document.getElementById('save-btn');
+      if (sb && !sb.dataset.boundSave) { sb.dataset.boundSave = '1'; sb.addEventListener('click', (e) => saveConfig(e)); }
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bind);
+    else bind();
+  })();
   </script>
 </body>
 </html>`;

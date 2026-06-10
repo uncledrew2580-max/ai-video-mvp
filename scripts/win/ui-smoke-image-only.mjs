@@ -705,9 +705,15 @@ async function main() {
       }
 
       // Locate the 保存配置 button and confirm it is actually clickable.
-      const saveBtn = await firstLocator(page, ['button[data-testid="save-config-btn"]', '#save-btn', 'button:has-text("保存配置")']);
+      const saveBtn = await firstLocator(page, ['button[data-testid="save-config-button"]', '#save-btn', 'button:has-text("保存配置")']);
       report.save_button_selector_matched = Boolean(saveBtn);
-      report.save_handler_present = await page.evaluate(() => typeof window.saveConfig === 'function').catch(() => null);
+      // The handler is "present" when window.saveConfig is exposed OR the save
+      // button carries the addEventListener binding marker (B8Q closure binding).
+      report.save_handler_present = await page.evaluate(() => {
+        const fn = typeof window.saveConfig === 'function';
+        const bound = !!document.querySelector('[data-testid="save-config-button"][data-bound-save="1"], #save-btn[data-bound-save="1"]');
+        return fn || bound;
+      }).catch(() => null);
       if (!saveBtn) {
         report.visible_buttons = await visibleButtons();
         await captureDomSummary(page, 'save-button-missing-dom.json');
