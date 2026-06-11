@@ -978,7 +978,7 @@ test('B8V: report carries the product-image + WF01/n8n binary diagnostic fields'
 
 test('B8V: WF01 binary diagnostics are READ-ONLY and never emit base64/secrets', () => {
   const src = readUi();
-  const fn = src.slice(src.indexOf('function collectWf01BinaryDiagnostics'), src.indexOf('// ── Diagnostics'));
+  const fn = src.slice(src.indexOf('function collectWf01BinaryDiagnostics'), src.indexOf('// B8X1: read-only'));
   assert.ok(fn, 'collectWf01BinaryDiagnostics must exist');
   // Read-only: only SELECT against the n8n DB — never INSERT/UPDATE/DELETE.
   assert.ok(/SELECT /.test(fn), 'must SELECT execution data');
@@ -1003,4 +1003,85 @@ test('B8V: still no direct config write / no Veo/video/final / no fake success',
   // The fixture upload path does not call /config-save or any webhook directly for success.
   const fn = src.slice(src.indexOf('upload a FIXED'), src.indexOf('collectWf01BinaryDiagnostics(report)'));
   assert.ok(!/\/config-save/.test(fn) && !/webhook/.test(fn), 'brief upload must not call /config-save or a webhook directly');
+});
+
+// ── P14-B8X1: richer (redacted, read-only) WF01 execution diagnostics ─────────
+
+const wf01ExecFn = () => {
+  const src = readUi();
+  return src.slice(src.indexOf('function collectWf01ExecutionDiagnostics'), src.indexOf('// ── Diagnostics ──'));
+};
+
+test('B8X1: report exposes a wf01_diagnostics object with all the hard execution fields', () => {
+  const src = readUi();
+  assert.ok(/wf01_diagnostics: null/.test(src), 'report must init wf01_diagnostics');
+  const fn = wf01ExecFn();
+  for (const f of [
+    'execution_created', 'classification', 'execution_id', 'workflow_id', 'workflow_name',
+    'status', 'started_at', 'stopped_at', 'last_node_executed', 'error_node', 'error_message',
+    'error_type', 'error_stack_present', 'model_call_seen', 'http_status', 'model_provider',
+    'model_name', 'response_redacted_summary', 'json_parse_error', 'input_keys', 'binary_keys',
+    'binary_local_paths_exist', 'task_runner_rejected', 'task_runner_reject_reason',
+  ]) {
+    assert.ok(fn.includes(f), `wf01_diagnostics must include ${f}`);
+  }
+});
+
+test('B8X1: WF01 exec diagnostics are READ-ONLY (SELECT only) and called after the pipeline', () => {
+  const src = readUi();
+  const fn = wf01ExecFn();
+  assert.ok(/SELECT /.test(fn), 'must SELECT execution rows');
+  assert.ok(!/\b(INSERT|UPDATE|DELETE|DROP|REPLACE)\b/.test(fn), 'must never write to the n8n DB');
+  // Called both at the verdict and the ui_pipeline catch.
+  assert.ok(/collectWf01ExecutionDiagnostics\(report\)/.test(src), 'must be invoked');
+  const verdictIdx = src.indexOf('FULL-mode verdict');
+  assert.ok(src.indexOf('collectWf01ExecutionDiagnostics(report)') > 0, 'invoked');
+  assert.ok(verdictIdx > 0, 'verdict section exists');
+});
+
+test('B8X1: a missing execution DB does NOT fake an execution id', () => {
+  const fn = wf01ExecFn();
+  assert.ok(/if \(!fs\.existsSync\(dbPath\)\)[\s\S]{0,120}execution_db_not_found/.test(fn), 'db-missing => classification execution_db_not_found');
+  // execution_id stays null (initialized null; execution_created defaults false until a row is found).
+  assert.ok(/execution_id: null/.test(fn) && /execution_created: false/.test(fn), 'no fake execution_id/created without a row');
+  assert.ok(/if \(!ex\)[\s\S]{0,80}no_execution/.test(fn), 'no row => no_execution');
+});
+
+test('B8X1: model_call_seen/http_status are NOT guessed when no HTTP node ran', () => {
+  const fn = wf01ExecFn();
+  // http_status only set from a real httpCode/response.status; model_call_seen only then or on an Api error.
+  assert.ok(/http_status: null/.test(fn) && /model_call_seen: false/.test(fn), 'defaults are null/false');
+  assert.ok(/if \(httpCode != null\) \{ D\.http_status = Number\(httpCode\); D\.model_call_seen = true; \}/.test(fn),
+    'http_status/model_call_seen set ONLY from a real httpCode');
+  // No hardcoded 401/403/429 guessing.
+  assert.ok(!/http_status = (401|403|429|500)/.test(fn), 'must not guess an HTTP status');
+});
+
+test('B8X1: task-runner rejection is detected (redacted reason) and classified', () => {
+  const fn = wf01ExecFn();
+  assert.ok(/rejected by Runner with reason "\(\[\^"\]\+\)"|rejected by Runner with reason/.test(fn), 'must scan n8n.log for the runner rejection');
+  assert.ok(/task_runner_rejected = true/.test(fn), 'must set task_runner_rejected');
+  assert.ok(/started_but_failed_task_runner_rejected/.test(fn), 'must classify a runner-rejected failure distinctly');
+  assert.ok(/redactString\(m\[1\]\)/.test(fn), 'the reject reason must be redacted');
+});
+
+test('B8X1: diagnostics are REDACTED — no API key / Authorization / full prompt / base64 / raw response', () => {
+  const fn = wf01ExecFn();
+  // Every free-text field goes through redactString + a short slice.
+  assert.ok(/error_message = redactString/.test(fn), 'error_message redacted');
+  assert.ok(/response_redacted_summary = redactString\(JSON\.stringify\(resp\)\)\.slice\(0, 200\)/.test(fn), 'response summary redacted + truncated');
+  assert.ok(!/base64/.test(fn), 'must not reference base64');
+  assert.ok(!/Authorization|api_key|bearer/i.test(fn), 'must not read Authorization/api_key');
+  // input/binary keys are NAMES only (regex on key names, never values).
+  assert.ok(/input_keys = \[\.\.\.new Set/.test(fn) && /binary_keys = \[\.\.\.new Set/.test(fn), 'keys are names only');
+  assert.ok(/error_stack_present = Boolean\(err\.stack\)/.test(fn), 'stack recorded as a boolean, not dumped');
+});
+
+test('B8X1: existing B8V binary diagnostics + B8T/Veo defenses are preserved', () => {
+  const src = readUi();
+  // B8V binary fields/functions intact.
+  assert.ok(/function collectWf01BinaryDiagnostics/.test(src) && /wf01_binary_keys/.test(src), 'B8V binary diagnostics kept');
+  // Stop-proof flags + no direct config write unchanged.
+  assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
+  assert.ok(!/writeFileSync\([^)]*local-config\.json/.test(src), 'no direct local-config write');
 });

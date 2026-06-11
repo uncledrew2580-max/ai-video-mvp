@@ -177,6 +177,7 @@ const report = {
   wf01_product_image_local_paths_exist: [], // booleans only (no paths/base64)
   n8n_binary_storage_summary: null,     // { dir_exists, file_count } only
   binary_restore_error: null,           // redacted n8n "restore binary" error if any
+  wf01_diagnostics: null,               // B8X1: redacted WF01 execution diagnostics (see collectWf01ExecutionDiagnostics)
   // full-mode pipeline milestones
   brief_submitted_via_ui: false,
   concept_ready_via_ui: false,
@@ -390,6 +391,115 @@ function collectWf01BinaryDiagnostics(report) {
   const errM = text.match(/(Failed to restore binary data[^"\\]*|No such file[^"\\]*)/i);
   if (errM && !report.binary_restore_error) report.binary_restore_error = redactString(errM[1]).slice(0, 200);
   report.wf01_binary_present = report.wf01_binary_keys.length > 0 || (report.wf01_product_image_count || 0) > 0 || exists.some(Boolean);
+}
+
+// B8X1: read-only, REDACTED WF01 execution diagnostics — the hard fields the B8W
+// artifact lacked (execution id, last node, stored error, http status, runner
+// rejection). Names/enums/booleans/short-redacted strings only — never the full
+// prompt, full model response, base64, paths, or any secret. Best-effort: never throws.
+function collectWf01ExecutionDiagnostics(report) {
+  const D = {
+    execution_created: false,
+    classification: 'unknown', // execution_db_not_found|no_execution|started_but_failed[_task_runner_rejected]|succeeded_ui_no_concept|running_or_timeout
+    execution_id: null, workflow_id: null, workflow_name: null,
+    status: null, started_at: null, stopped_at: null,
+    last_node_executed: null, error_node: null, error_message: null, error_type: null, error_stack_present: false,
+    model_call_seen: false, http_status: null, model_provider: null, model_name: null,
+    response_redacted_summary: null, json_parse_error: false,
+    input_keys: [], binary_keys: [], binary_local_paths_exist: [],
+    task_runner_rejected: false, task_runner_reject_reason: null,
+  };
+  // Model route (provider/name) from config — these are NOT secrets (the key is not read).
+  try {
+    const cfgPath = path.join(userSupportDir(), 'config', 'local-config.json');
+    if (fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+      const cd = (cfg.tasks && cfg.tasks.creative_direction) || {};
+      D.model_provider = cd.provider || (cfg.providers && cfg.providers.kie ? 'kie' : null);
+      D.model_name = cd.model || null;
+    }
+  } catch {}
+  // n8n.log task-runner rejection (redacted reason only — the reason has no secrets).
+  try {
+    const logPath = path.join(userSupportDir(), 'logs', 'launcher', 'n8n.log');
+    if (fs.existsSync(logPath)) {
+      const log = fs.readFileSync(logPath, 'utf8');
+      const m = log.match(/rejected by Runner with reason "([^"]+)"/i) || log.match(/(Offer expired[^"\n]{0,80})/i);
+      if (m) { D.task_runner_rejected = true; D.task_runner_reject_reason = redactString(m[1]).slice(0, 120); }
+    }
+  } catch {}
+
+  const dbPath = path.join(userSupportDir(), 'workflow-data', '.n8n', 'database.sqlite');
+  if (!fs.existsSync(dbPath)) { D.classification = 'execution_db_not_found'; report.wf01_diagnostics = D; return; }
+
+  const wf01Id = 'rKHHjD2QBlL6EhaM';
+  let ex = null;
+  try {
+    let rows = [];
+    try {
+      rows = JSON.parse(runSqlite(['-json', dbPath,
+        `SELECT id, status, "startedAt" AS startedAt, "stoppedAt" AS stoppedAt, "workflowId" AS workflowId FROM execution_entity WHERE "workflowId"='${wf01Id}' ORDER BY id DESC LIMIT 1;`,
+      ], { encoding: 'utf8' }) || '[]');
+    } catch {
+      rows = JSON.parse(runSqlite(['-json', dbPath,
+        `SELECT id, status, "workflowId" AS workflowId FROM execution_entity WHERE "workflowId"='${wf01Id}' ORDER BY id DESC LIMIT 1;`,
+      ], { encoding: 'utf8' }) || '[]');
+    }
+    ex = rows[0] || null;
+  } catch (e) { D.error_message = redactString(String(e.message || e)).slice(0, 200); }
+
+  if (!ex) { D.classification = 'no_execution'; report.wf01_diagnostics = D; return; }
+  D.execution_created = true;
+  D.execution_id = String(ex.id);
+  D.workflow_id = String(ex.workflowId || wf01Id);
+  D.status = ex.status != null ? String(ex.status) : null;
+  D.started_at = ex.startedAt != null ? String(ex.startedAt) : null;
+  D.stopped_at = ex.stoppedAt != null ? String(ex.stoppedAt) : null;
+  try {
+    const w = JSON.parse(runSqlite(['-json', dbPath, `SELECT name FROM workflow_entity WHERE id='${wf01Id}';`], { encoding: 'utf8' }) || '[]');
+    D.workflow_name = w[0] ? String(w[0].name) : null;
+  } catch {}
+
+  // Execution data → flatted parse (best-effort) → last node / error / http / keys.
+  let parsed = null; let text = '';
+  try {
+    const d = JSON.parse(runSqlite(['-json', dbPath, `SELECT data FROM execution_data WHERE "executionId"=${Number(ex.id)} LIMIT 1;`], { encoding: 'utf8' }) || '[]');
+    const dataStr = d[0] ? String(d[0].data || '') : '';
+    if (dataStr) {
+      try { parsed = _require('flatted').parse(dataStr); } catch {}
+      try { text = JSON.stringify(parsed); } catch { text = dataStr; }
+      D.binary_keys = [...new Set((text.match(/"(product_images_\d+|image_\d+)"/g) || []).map((s) => s.replace(/"/g, '')))].slice(0, 20);
+      for (const mm of [...text.matchAll(/"(?:image_\d+_path|product_image_local_path[s]?)"\s*:\s*"([^"]+)"/g)].slice(0, 8)) {
+        try { D.binary_local_paths_exist.push(fs.existsSync(mm[1])); } catch { D.binary_local_paths_exist.push(false); }
+      }
+      D.input_keys = [...new Set((text.match(/"(product_name|target_market|target_language|creative_task_type|product_image_count|product_images_\d+|image_\d+_path)"/g) || []).map((s) => s.replace(/"/g, '')))].slice(0, 25);
+      D.json_parse_error = /Unexpected token|Unexpected end of JSON|is not valid JSON|JSON\.parse/i.test(text);
+    }
+  } catch (e) { if (!D.error_message) D.error_message = redactString(String(e.message || e)).slice(0, 200); }
+
+  if (parsed && parsed.resultData && typeof parsed.resultData === 'object') {
+    const rd = parsed.resultData;
+    if (typeof rd.lastNodeExecuted === 'string') D.last_node_executed = rd.lastNodeExecuted;
+    const err = rd.error;
+    if (err && typeof err === 'object') {
+      D.error_node = (err.node && err.node.name) ? String(err.node.name) : null;
+      D.error_message = redactString(String(err.message || '')).slice(0, 300);
+      D.error_type = err.name ? String(err.name) : (err.constructor && err.constructor.name) || null;
+      D.error_stack_present = Boolean(err.stack);
+      const httpCode = err.httpCode || (err.cause && (err.cause.httpCode || (err.cause.response && err.cause.response.status))) || null;
+      if (httpCode != null) { D.http_status = Number(httpCode); D.model_call_seen = true; }
+      if (/Api/i.test(D.error_type || '')) D.model_call_seen = true;
+      const resp = err.cause && err.cause.response;
+      if (resp) { try { D.response_redacted_summary = redactString(JSON.stringify(resp)).slice(0, 200); } catch {} }
+      if (/json|unexpected token|not valid JSON/i.test(D.error_message || '')) D.json_parse_error = true;
+    }
+  }
+
+  const st = String(D.status || '').toLowerCase();
+  if (st === 'success') D.classification = 'succeeded_ui_no_concept';
+  else if (st === 'running' || st === 'new' || st === 'waiting' || st === 'unknown' || st === '') D.classification = 'running_or_timeout';
+  else D.classification = D.task_runner_rejected ? 'started_but_failed_task_runner_rejected' : 'started_but_failed';
+  report.wf01_diagnostics = D;
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
@@ -1139,6 +1249,7 @@ async function main() {
     } else { report.image_ok = false; report.errors.push('WF01 concept did not become selectable before timeout'); }
   } catch (e) {
     try { collectWf01BinaryDiagnostics(report); } catch {}
+    try { collectWf01ExecutionDiagnostics(report); } catch {}
     fail('ui_pipeline', e, apiKey);
     return;
   }
@@ -1146,7 +1257,10 @@ async function main() {
   // ── FULL-mode verdict ───────────────────────────────────────────────────────
   // B8V: now that WF01 has executed (succeeded or failed), capture its product-image
   // binary presence so a storyboard miss can be traced to upload/binary, not config.
+  // B8X1: also capture the WF01 execution id / last node / stored error / http /
+  // task-runner rejection (all redacted) so the cause is hard data, not inference.
   try { collectWf01BinaryDiagnostics(report); } catch (e) { report.binary_restore_error = report.binary_restore_error || redactString(String(e.message || e)).slice(0, 200); }
+  try { collectWf01ExecutionDiagnostics(report); } catch {}
   if (report.forbidden_requests_blocked.length > 0) { fail('forbidden_request', new Error('forbidden video/Veo request attempted'), apiKey); return; }
   if (report.storyboard_image_generated_via_ui === true && report.image_ok === true) {
     report.status = 'passed';
