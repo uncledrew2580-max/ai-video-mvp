@@ -178,6 +178,8 @@ const report = {
   n8n_binary_storage_summary: null,     // { dir_exists, file_count } only
   binary_restore_error: null,           // redacted n8n "restore binary" error if any
   wf01_diagnostics: null,               // B8X1: redacted WF01 execution diagnostics (see collectWf01ExecutionDiagnostics)
+  task_runner_diagnostics: null,        // B8AB: n8n JS Task Runner offer/reject stats (redacted, read-only)
+  wf01_concept_output: null,            // B8AB: did WF01 actually produce selectable concepts? (UI status + /active state)
   // full-mode pipeline milestones
   brief_submitted_via_ui: false,
   concept_ready_via_ui: false,
@@ -514,6 +516,82 @@ function collectWf01ExecutionDiagnostics(report) {
   else if (st === 'running' || st === 'new' || st === 'waiting' || st === 'unknown' || st === '') D.classification = 'running_or_timeout';
   else D.classification = D.task_runner_rejected ? 'started_but_failed_task_runner_rejected' : 'started_but_failed';
   report.wf01_diagnostics = D;
+}
+
+// B8AB: read-only n8n JS Task Runner offer/reject stats from the launcher n8n.log.
+// Counts only + redacted reasons — no secrets. Notes the HARDCODED 5s offer window
+// (OFFER_VALID_TIME_MS in @n8n/task-runner — not env-configurable in n8n 2.16.x).
+function collectTaskRunnerDiagnostics(report) {
+  const D = {
+    task_runner_mode: 'internal_js',
+    task_runner_ready: null,
+    registered_runner_seen: false,
+    registered_runner_name: null,
+    runner_ready_before_first_task: null,
+    rejected_task_count: 0,
+    rejected_task_ids: [],
+    rejected_node_names: [], // n8n.log reject lines carry task ids, not node names
+    reject_reasons: [],
+    offer_expired_count: 0,
+    code_node_tasks_seen: 0,
+    runner_config_redacted: {
+      offer_valid_time_ms_hardcoded: 5000,
+      offer_window_configurable: false,
+      max_concurrency_default: 10,
+      heartbeat_interval_default_s: 30,
+      task_timeout_s_launcher: 900,
+      task_request_timeout_s_launcher: 1200,
+    },
+    n8n_runner_env_redacted: null, // not readable from the smoke process (separate proc)
+  };
+  try {
+    const logPath = path.join(userSupportDir(), 'logs', 'launcher', 'n8n.log');
+    if (!fs.existsSync(logPath)) { report.task_runner_diagnostics = D; return; }
+    const log = fs.readFileSync(logPath, 'utf8');
+    const reg = log.match(/Registered runner "([^"]+)"/);
+    D.registered_runner_seen = Boolean(reg);
+    D.registered_runner_name = reg ? reg[1] : null;
+    D.task_runner_ready = D.registered_runner_seen;
+    const rejects = [...log.matchAll(/Task \(([^)]+)\) rejected by Runner with reason "([^"]+)"/g)];
+    D.rejected_task_count = rejects.length;
+    D.rejected_task_ids = rejects.map((m) => m[1]).slice(0, 20);
+    D.reject_reasons = [...new Set(rejects.map((m) => redactString(m[2]).slice(0, 80)))].slice(0, 5);
+    D.offer_expired_count = rejects.filter((m) => /Offer expired/i.test(m[2])).length;
+    D.code_node_tasks_seen = (log.match(/Task \([^)]+\)/g) || []).length;
+    const regIdx = reg ? log.indexOf(reg[0]) : -1;
+    const firstTaskMatch = log.search(/Task \([^)]+\)/);
+    D.runner_ready_before_first_task = (regIdx >= 0 && firstTaskMatch >= 0) ? (regIdx < firstTaskMatch) : null;
+  } catch (e) { D.error = redactString(String(e.message || e)).slice(0, 150); }
+  report.task_runner_diagnostics = D;
+}
+
+// B8AB: when WF01 "succeeds" but no concept becomes selectable, capture WHETHER the
+// concept output actually exists — the UI's own /api/wf01-status, the /active page
+// state, and a best-effort concept count from the execution data. Redacted; counts
+// and short status only — never a full prompt/model response.
+async function collectConceptOutputDiagnostics(report, page, uiBase, since) {
+  const D = { wf01_status_api: null, active_url: null, concept_count_in_execution: null };
+  try {
+    const raw = await httpGetJson(`http://127.0.0.1:${UI_PORT}/api/wf01-status`);
+    if (raw) { try { D.wf01_status_api = JSON.parse(redactString(JSON.stringify(raw)).slice(0, 800)); } catch { D.wf01_status_api = { unparsed: true }; } }
+  } catch {}
+  try {
+    await page.goto(`${uiBase}/active?since=${encodeURIComponent(since)}`, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    D.active_url = page.url();
+    await captureDomSummary(page, 'concept-not-ready-active-dom.json');
+    await screenshot(page, '05b-concept-not-ready.png');
+  } catch {}
+  try {
+    const dbPath = path.join(userSupportDir(), 'workflow-data', '.n8n', 'database.sqlite');
+    if (fs.existsSync(dbPath)) {
+      const d = JSON.parse(runSqlite(['-json', dbPath, 'SELECT data FROM execution_data ORDER BY "executionId" DESC LIMIT 1;'], { encoding: 'utf8' }) || '[]');
+      const dataStr = d[0] ? String(d[0].data || '') : '';
+      let text = dataStr; try { text = JSON.stringify(_require('flatted').parse(dataStr)); } catch {}
+      const counts = ['"concept_id"', '"video_type"', '"selectedConceptVideoType"', '"creative_direction"'].map((k) => (text.split(k).length - 1));
+      D.concept_count_in_execution = Math.max(0, ...counts) || 0;
+    }
+  } catch {}
+  report.wf01_concept_output = D;
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
@@ -1219,7 +1297,14 @@ async function main() {
       return false;
     }
 
-    if (await waitForStage(/\/concepts\/item/, 'concept ready (WF01)', 4 * 60 * 1000)) {
+    const conceptReady = await waitForStage(/\/concepts\/item/, 'concept ready (WF01)', 4 * 60 * 1000);
+    if (!conceptReady) {
+      // B8AB: WF01 may report success yet no concept becomes selectable — capture the
+      // UI's own concept view + /active state + concept output count to pinpoint the
+      // real cause (empty concept output vs UI-not-rendered vs task-runner timeout).
+      try { await collectConceptOutputDiagnostics(report, page, uiBase, since); } catch {}
+    }
+    if (conceptReady) {
       report.concept_ready_via_ui = true;
       report.stages.push('concept_ready_via_ui');
       await screenshot(page, '05-concept-ready.png');
@@ -1264,6 +1349,7 @@ async function main() {
   } catch (e) {
     try { collectWf01BinaryDiagnostics(report); } catch {}
     try { collectWf01ExecutionDiagnostics(report); } catch {}
+    try { collectTaskRunnerDiagnostics(report); } catch {}
     fail('ui_pipeline', e, apiKey);
     return;
   }
@@ -1275,6 +1361,7 @@ async function main() {
   // task-runner rejection (all redacted) so the cause is hard data, not inference.
   try { collectWf01BinaryDiagnostics(report); } catch (e) { report.binary_restore_error = report.binary_restore_error || redactString(String(e.message || e)).slice(0, 200); }
   try { collectWf01ExecutionDiagnostics(report); } catch {}
+  try { collectTaskRunnerDiagnostics(report); } catch {}
   if (report.forbidden_requests_blocked.length > 0) { fail('forbidden_request', new Error('forbidden video/Veo request attempted'), apiKey); return; }
   if (report.storyboard_image_generated_via_ui === true && report.image_ok === true) {
     report.status = 'passed';

@@ -1157,3 +1157,66 @@ test('B8Z: no hardcoded API key, no key in workflow/code; Veo/video/final defens
   const src = readUi();
   assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
 });
+
+// ── P14-B8AB: task-runner "Offer expired" diagnostics (read-only, no fix yet) ──
+
+const taskRunnerFn = () => {
+  const src = readUi();
+  return src.slice(src.indexOf('function collectTaskRunnerDiagnostics'), src.indexOf('async function collectConceptOutputDiagnostics'));
+};
+const conceptOutFn = () => {
+  const src = readUi();
+  return src.slice(src.indexOf('async function collectConceptOutputDiagnostics'), src.indexOf('// ── Diagnostics ──'));
+};
+
+test('B8AB: report adds task_runner_diagnostics + wf01_concept_output', () => {
+  const src = readUi();
+  assert.ok(/task_runner_diagnostics: null/.test(src) && /wf01_concept_output: null/.test(src), 'report inits both diagnostics');
+});
+
+test('B8AB: task-runner diagnostics parse n8n.log offer/reject stats (counts + redacted reasons)', () => {
+  const fn = taskRunnerFn();
+  for (const f of ['rejected_task_count', 'rejected_task_ids', 'reject_reasons', 'offer_expired_count', 'registered_runner_seen', 'runner_ready_before_first_task', 'code_node_tasks_seen', 'task_runner_mode', 'runner_config_redacted']) {
+    assert.ok(fn.includes(f), `task_runner_diagnostics must include ${f}`);
+  }
+  assert.ok(/rejected by Runner with reason "/.test(fn), 'must scan the n8n.log reject lines');
+  assert.ok(/Offer expired/.test(fn) && /offer_expired_count = /.test(fn), 'must count Offer expired specifically');
+  assert.ok(/redactString\(m\[2\]\)/.test(fn), 'reject reasons must be redacted');
+});
+
+test('B8AB: diagnostics record the HARDCODED, non-configurable 5s offer window finding', () => {
+  const fn = taskRunnerFn();
+  assert.ok(/offer_valid_time_ms_hardcoded: 5000/.test(fn), 'must record the hardcoded 5s offer window');
+  assert.ok(/offer_window_configurable: false/.test(fn), 'must record that the offer window is NOT env-configurable');
+});
+
+test('B8AB: concept-output diagnostics capture the UI status + /active state + concept count', () => {
+  const fn = conceptOutFn();
+  assert.ok(/\/api\/wf01-status/.test(fn), 'must query the UI /api/wf01-status');
+  assert.ok(/concept-not-ready-active-dom\.json/.test(fn), 'must dump the /active DOM when concept not ready');
+  assert.ok(/concept_count_in_execution/.test(fn), 'must compute a concept count from the execution data');
+  // It is invoked when the concept never becomes selectable.
+  const src = readUi();
+  assert.ok(/if \(!conceptReady\) \{[\s\S]{0,400}await collectConceptOutputDiagnostics\(report, page, uiBase, since\)/.test(src),
+    'must run concept-output diagnostics when concept is not ready');
+});
+
+test('B8AB: the new diagnostics are READ-ONLY and never leak secrets', () => {
+  const tr = taskRunnerFn(); const co = conceptOutFn();
+  for (const fn of [tr, co]) {
+    assert.ok(!/\b(INSERT|UPDATE|DELETE|DROP)\b/.test(fn), 'must not write to the n8n DB');
+    assert.ok(!/base64/.test(fn), 'must not reference base64');
+    assert.ok(!/Authorization|api_key|bearer/i.test(fn), 'must not read Authorization/api_key');
+  }
+  assert.ok(/redactString\(JSON\.stringify\(raw\)\)\.slice\(0, 800\)/.test(co), 'the wf01-status response is redacted + truncated');
+});
+
+test('B8AB: this phase changes ONLY ui-smoke diagnostics — no launcher/WF01/runner-config edits here', () => {
+  // The fix scope is diagnostics-only; the launcher n8n runner env block is unchanged
+  // (still TASK_TIMEOUT/TASK_REQUEST_TIMEOUT only — the real runner fix is a later phase).
+  const launcher = fs.readFileSync(path.join(ROOT, 'client', 'launcher.mjs'), 'utf8');
+  assert.ok(/N8N_RUNNERS_TASK_TIMEOUT: '900'/.test(launcher), 'launcher runner env unchanged in this phase');
+  // Stop-proof flags intact.
+  const src = readUi();
+  assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
+});
