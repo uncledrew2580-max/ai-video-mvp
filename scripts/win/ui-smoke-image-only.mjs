@@ -581,6 +581,25 @@ async function collectConceptOutputDiagnostics(report, page, uiBase, since) {
     await captureDomSummary(page, 'concept-not-ready-active-dom.json');
     await screenshot(page, '05b-concept-not-ready.png');
   } catch {}
+  // B8AD: did WF01 write the concept-context to the UNIFIED Windows path the UI reads,
+  // or to the Mac fallback? (path-only existence booleans — no file contents.)
+  try {
+    const projectId = (D.wf01_status_api && D.wf01_status_api.projectId) || null;
+    const readDir = path.join(userSupportDir(), 'workflow-data', '.n8n-local-cache', 'concept-context');
+    const macDir = path.join(os.homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data', '.n8n-local-cache', 'concept-context');
+    const hasFile = (dir) => {
+      try {
+        if (projectId && fs.existsSync(path.join(dir, `concept_context_${projectId}.json`))) return true;
+        return fs.existsSync(dir) && fs.readdirSync(dir).some((f) => f.startsWith('concept_context_') && f.endsWith('.json'));
+      } catch { return false; }
+    };
+    D.workflow_data_root_ui_read = path.join(userSupportDir(), 'workflow-data');
+    D.concept_context_read_dir = readDir;
+    D.concept_context_read_file_exists = hasFile(readDir);
+    D.concept_context_mac_fallback_file_exists = hasFile(macDir);
+    D.mac_fallback_path_used_on_windows = process.platform === 'win32' && D.concept_context_mac_fallback_file_exists;
+    D.path_mismatch_detected = Boolean(D.concept_context_mac_fallback_file_exists && !D.concept_context_read_file_exists);
+  } catch {}
   try {
     const dbPath = path.join(userSupportDir(), 'workflow-data', '.n8n', 'database.sqlite');
     if (fs.existsSync(dbPath)) {

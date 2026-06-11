@@ -1220,3 +1220,70 @@ test('B8AB: this phase changes ONLY ui-smoke diagnostics — no launcher/WF01/ru
   const src = readUi();
   assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
 });
+
+// ── P14-B8AD: workflow-data path unification (Windows packaged) + audit ────────
+
+const WF_FILES = ['n8n01', 'n8n02a', 'n8n02b', 'n8n03'].map((f) => path.join(ROOT, '正式导入文件', 'iteration-v1', `${f}.json`));
+const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+
+test('B8AD: NO WF Code node has an unguarded Mac workflow-data/config fallback (Windows safe)', () => {
+  for (const f of WF_FILES) {
+    const raw = fs.readFileSync(f, 'utf8');
+    const macLines = (raw.match(/homedir\(\), 'Library', 'Application Support', 'AI Video', '(?:workflow-data|config)'/g) || []).length;
+    const guarded = (raw.match(/platform === 'win32'[\s\S]{0,400}?homedir\(\), 'Library', 'Application Support', 'AI Video', '(?:workflow-data|config)'/g) || []).length;
+    assert.equal(macLines - guarded, 0, `${path.basename(f)} has ${macLines - guarded} UNGUARDED Mac fallback(s)`);
+  }
+});
+
+test('B8AD: every Mac fallback is platform-aware → Windows uses %APPDATA%/HOME AppData\\Roaming', () => {
+  for (const f of WF_FILES) {
+    const raw = fs.readFileSync(f, 'utf8');
+    if (!/homedir\(\), 'Library'/.test(raw)) continue; // no fallback in this file
+    assert.ok(/platform === 'win32' \? require\('path'\)\.join\(require\('process'\)\.env\.APPDATA \|\| require\('path'\)\.join\(require\('process'\)\.env\.USERPROFILE \|\| require\('process'\)\.env\.HOME \|\| require\('os'\)\.homedir\(\), 'AppData', 'Roaming'\), 'AI Video'/.test(raw),
+      `${path.basename(f)} must use the platform-aware Windows path`);
+    // Must NOT hardcode an absolute Mac/Library path as the Windows branch.
+    assert.ok(!/win32 \? require\('path'\)\.join\(require\('os'\)\.homedir\(\), 'Library'/.test(raw), `${path.basename(f)} Windows branch must not be a Mac path`);
+  }
+});
+
+test('B8AD: WF JSON still valid + every Code node passes an async-aware syntax check', () => {
+  for (const f of WF_FILES) {
+    const wf = JSON.parse(fs.readFileSync(f, 'utf8'));
+    for (const node of wf.nodes || []) {
+      const code = node.parameters && node.parameters.jsCode;
+      if (code) assert.doesNotThrow(() => new AsyncFn(code), `${path.basename(f)} node "${node.name}" jsCode syntax error`);
+    }
+  }
+});
+
+test('B8AD: this is path-resolution ONLY — no model/prompt/webhook/schema tokens changed', () => {
+  // Every added line in the WF diff must be a platform-aware path expression. (Static
+  // guard: the canonical Windows path marker must exist; and the unified write target is
+  // %APPDATA%\AI Video\workflow-data, the same dir the serve reads from.)
+  const serve = readServe();
+  assert.ok(/WORKFLOW_DATA_ROOT[\s\S]{0,200}workflow-data/.test(serve), 'serve reads WORKFLOW_DATA_ROOT/workflow-data');
+  for (const f of WF_FILES) {
+    const raw = fs.readFileSync(f, 'utf8');
+    // Extract ONLY the inserted platform-aware expressions (bounded by the ternary) and
+    // verify each carries path tokens only — never a model/route/webhook literal. (The
+    // whole jsCode is one physical line, so we must bound to the expression itself.)
+    const exprs = raw.match(/require\('process'\)\.platform === 'win32' \? require\('path'\)\.join[\s\S]*?'Library', 'Application Support', 'AI Video', '(?:workflow-data|config)'(?:, 'local-config\.json')?\)\)/g) || [];
+    if (!/homedir\(\), 'Library'/.test(raw)) continue;
+    assert.ok(exprs.length > 0, `${path.basename(f)} should contain bounded platform-aware exprs`);
+    for (const e of exprs) {
+      assert.ok(!/(gemini-|veo|kie_|aspectRatio|responseModalities|webhook|nanobanana|generationConfig|model)/i.test(e),
+        `${path.basename(f)} win32 expression must not carry a model/route/webhook token`);
+    }
+  }
+});
+
+test('B8AD: smoke records workflow-data path-unification diagnostics (write vs read)', () => {
+  const src = readUi();
+  for (const fld of ['workflow_data_root_ui_read', 'concept_context_read_dir', 'concept_context_read_file_exists', 'concept_context_mac_fallback_file_exists', 'mac_fallback_path_used_on_windows', 'path_mismatch_detected']) {
+    assert.ok(src.includes(fld), `wf01_concept_output must include ${fld}`);
+  }
+  // The mismatch is computed (Mac has it, unified read path doesn't) — booleans only.
+  assert.ok(/path_mismatch_detected = Boolean\(D\.concept_context_mac_fallback_file_exists && !D\.concept_context_read_file_exists\)/.test(src),
+    'path_mismatch_detected = mac-has && !read-has');
+  assert.ok(!/concept_context_read_file_exists = .*readFileSync/.test(src), 'must not read file contents (existsSync only)');
+});
