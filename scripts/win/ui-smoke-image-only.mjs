@@ -180,6 +180,9 @@ const report = {
   wf01_diagnostics: null,               // B8X1: redacted WF01 execution diagnostics (see collectWf01ExecutionDiagnostics)
   task_runner_diagnostics: null,        // B8AB: n8n JS Task Runner offer/reject stats (redacted, read-only)
   wf01_concept_output: null,            // B8AB: did WF01 actually produce selectable concepts? (UI status + /active state)
+  wf02b_diagnostics: null,              // B8AF: WF02B storyboard-image execution / Nano-call / binary / image-path (redacted)
+  review_page_reached: null,            // B8AF: the storyboard review page loaded
+  review_panel_image_present: null,     // B8AF: a storyboard panel image was visible on review
   // full-mode pipeline milestones
   brief_submitted_via_ui: false,
   concept_ready_via_ui: false,
@@ -611,6 +614,129 @@ async function collectConceptOutputDiagnostics(report, page, uiBase, since) {
     }
   } catch {}
   report.wf01_concept_output = D;
+}
+
+// B8AF: read-only, REDACTED WF02B (storyboard image) diagnostics — pinpoints WHICH
+// layer failed: execution / Nano-image-API call / task-runner offer / binary restore /
+// image write-vs-read path. Names/counts/booleans/short-redacted only; never a full
+// prompt, full model response, base64, or secret. Best-effort: never throws.
+function collectWf02bDiagnostics(report) {
+  const CACHE = path.join(userSupportDir(), 'workflow-data', '.n8n-local-cache');
+  const MAC_CACHE = path.join(os.homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data', '.n8n-local-cache');
+  const dbPath = path.join(userSupportDir(), 'workflow-data', '.n8n', 'database.sqlite');
+  const has = (d, re) => { try { return fs.existsSync(d) && fs.readdirSync(d).some((f) => (re ? re.test(f) : true)); } catch { return false; } };
+  const D = {
+    // ── execution ──
+    wf02b_execution_id: null, wf02b_workflow_id: 'storyboardGenerateV1', wf02b_workflow_name: null,
+    wf02b_status: null, wf02b_started_at: null, wf02b_stopped_at: null,
+    wf02b_last_node_executed: null, wf02b_error_node: null, wf02b_error_message: null, wf02b_error_type: null,
+    wf02b_classification: 'unknown',
+    // ── Nano / image API ──
+    nano_call_seen: false, nano_http_status: null, nano_model_name: null,
+    nano_response_redacted_summary: null, nano_error_message: null, image_api_called_before_failure: false,
+    // ── task runner (whole-log scan, redacted) ──
+    wf02b_task_runner: null,
+    // ── binary restore ──
+    binary_restore_error: null, binary_restore_detail: null,
+    // ── storyboard image path ──
+    storyboard_image_generated: false, storyboard_image_write_dir: null, storyboard_image_write_file_exists: false,
+    panel_preview_read_dir: null, panel_preview_file_exists: false,
+    storyboard_path_mismatch_detected: false, mac_fallback_image_exists_on_windows: false,
+  };
+  // model name (config route value — not a secret)
+  try { const cfg = JSON.parse(fs.readFileSync(path.join(userSupportDir(), 'config', 'local-config.json'), 'utf8')); D.nano_model_name = (cfg.tasks && cfg.tasks.storyboard_image && cfg.tasks.storyboard_image.model) || null; } catch {}
+
+  // 1) WF02B execution (storyboardGenerateV1)
+  if (!fs.existsSync(dbPath)) { D.wf02b_classification = 'execution_db_not_found'; }
+  else {
+    try {
+      let rows = [];
+      try { rows = JSON.parse(runSqlite(['-json', dbPath, `SELECT id, status, "startedAt" AS startedAt, "stoppedAt" AS stoppedAt FROM execution_entity WHERE "workflowId"='storyboardGenerateV1' ORDER BY id DESC LIMIT 1;`], { encoding: 'utf8' }) || '[]'); }
+      catch { rows = JSON.parse(runSqlite(['-json', dbPath, `SELECT id, status FROM execution_entity WHERE "workflowId"='storyboardGenerateV1' ORDER BY id DESC LIMIT 1;`], { encoding: 'utf8' }) || '[]'); }
+      const ex = rows[0];
+      if (!ex) { D.wf02b_classification = 'no_wf02b_execution'; }
+      else {
+        D.wf02b_execution_id = String(ex.id);
+        D.wf02b_status = ex.status != null ? String(ex.status) : null;
+        D.wf02b_started_at = ex.startedAt != null ? String(ex.startedAt) : null;
+        D.wf02b_stopped_at = ex.stoppedAt != null ? String(ex.stoppedAt) : null;
+        try { const w = JSON.parse(runSqlite(['-json', dbPath, `SELECT name FROM workflow_entity WHERE id='storyboardGenerateV1';`], { encoding: 'utf8' }) || '[]'); D.wf02b_workflow_name = w[0] ? String(w[0].name) : null; } catch {}
+        try {
+          const d = JSON.parse(runSqlite(['-json', dbPath, `SELECT data FROM execution_data WHERE "executionId"=${Number(ex.id)} LIMIT 1;`], { encoding: 'utf8' }) || '[]');
+          const dataStr = d[0] ? String(d[0].data || '') : '';
+          let parsed = null; let text = dataStr; try { parsed = _require('flatted').parse(dataStr); text = JSON.stringify(parsed); } catch {}
+          if (parsed && parsed.resultData && typeof parsed.resultData === 'object') {
+            const rd = parsed.resultData;
+            if (typeof rd.lastNodeExecuted === 'string') D.wf02b_last_node_executed = rd.lastNodeExecuted;
+            const err = rd.error;
+            if (err && typeof err === 'object') {
+              D.wf02b_error_node = (err.node && err.node.name) ? String(err.node.name) : null;
+              D.wf02b_error_message = redactString(String(err.message || '')).slice(0, 300);
+              D.wf02b_error_type = err.name ? String(err.name) : null;
+              const hc = err.httpCode || (err.cause && (err.cause.httpCode || (err.cause.response && err.cause.response.status))) || null;
+              if (hc != null) { D.nano_http_status = Number(hc); D.nano_call_seen = true; D.nano_error_message = D.wf02b_error_message; }
+            }
+          }
+          // The Nano Code node throws "HTTP <code>: ..." on a failed call — capture the status.
+          const hm = text.match(/HTTP (\d{3})[:\s]/); if (hm && D.nano_http_status == null) { D.nano_http_status = Number(hm[1]); D.nano_call_seen = true; }
+        } catch {}
+        const st = String(D.wf02b_status || '').toLowerCase();
+        D.wf02b_classification = st === 'success' ? 'succeeded'
+          : (st === 'error' || st === 'crashed' || st === 'failed') ? 'started_but_failed'
+          : (st === '' || st === 'running' || st === 'new' || st === 'waiting') ? 'running_or_timeout' : 'unknown';
+      }
+    } catch (e) { if (!D.wf02b_error_message) D.wf02b_error_message = redactString(String(e.message || e)).slice(0, 200); }
+  }
+
+  // 2) Nano / image API — request/response files prove the call was attempted
+  D.image_api_called_before_failure = has(path.join(CACHE, 'gemini-requests')) || has(path.join(CACHE, 'gemini-responses'));
+  if (D.image_api_called_before_failure) D.nano_call_seen = true;
+  try {
+    const respDir = path.join(CACHE, 'gemini-responses');
+    if (fs.existsSync(respDir)) {
+      const files = fs.readdirSync(respDir).filter((f) => f.endsWith('.json'));
+      if (files.length) {
+        const raw = fs.readFileSync(path.join(respDir, files.sort().slice(-1)[0]), 'utf8');
+        D.nano_response_redacted_summary = redactString(raw).slice(0, 200);
+        const sm = raw.match(/"(?:statusCode|code|status)"\s*:\s*(\d{3})/); if (sm && D.nano_http_status == null) D.nano_http_status = Number(sm[1]);
+      }
+    }
+  } catch {}
+
+  // 3) storyboard image write/read paths (after B8AD both should be %APPDATA%)
+  D.storyboard_image_write_dir = path.join(CACHE, 'nanobanana');
+  D.storyboard_image_write_file_exists = has(D.storyboard_image_write_dir, /^storyboard_.*\.(png|jpe?g)$/i);
+  D.storyboard_image_generated = D.storyboard_image_write_file_exists;
+  D.panel_preview_read_dir = path.join(CACHE, '分镜图裁剪', 'previews');
+  D.panel_preview_file_exists = has(D.panel_preview_read_dir, /^panel_preview_.*\.(jpe?g|png)$/i);
+  D.mac_fallback_image_exists_on_windows = process.platform === 'win32'
+    && (has(path.join(MAC_CACHE, 'nanobanana'), /^storyboard_/i) || has(path.join(MAC_CACHE, '分镜图裁剪', 'previews'), /^panel_preview_/i));
+  // mismatch: an image landed on the Mac path (write) but not on the %APPDATA% read path.
+  D.storyboard_path_mismatch_detected = Boolean(D.mac_fallback_image_exists_on_windows && !D.storyboard_image_write_file_exists && !D.panel_preview_file_exists);
+
+  // 4) task runner (whole-log) + binary restore
+  try {
+    const logPath = path.join(userSupportDir(), 'logs', 'launcher', 'n8n.log');
+    if (fs.existsSync(logPath)) {
+      const log = fs.readFileSync(logPath, 'utf8');
+      const rejects = [...log.matchAll(/Task \(([^)]+)\) rejected by Runner with reason "([^"]+)"/g)];
+      D.wf02b_task_runner = {
+        rejected_task_count: rejects.length,
+        offer_expired_count: rejects.filter((m) => /Offer expired/i.test(m[2])).length,
+        rejected_task_ids: rejects.map((m) => m[1]).slice(0, 20),
+        rejected_node_names: [], // n8n.log carries task ids only, not node names
+        code_node_tasks_seen: (log.match(/Task \([^)]+\)/g) || []).length,
+        runner_reject_reasons: [...new Set(rejects.map((m) => redactString(m[2]).slice(0, 80)))].slice(0, 5),
+      };
+      const br = log.match(/Failed to restore binary data[^\n]*/i);
+      if (br) {
+        D.binary_restore_error = redactString(br[0]).slice(0, 200);
+        const idm = br[0].match(/ID[\s:\-]*([A-Za-z0-9_\-/.]+)/i);
+        D.binary_restore_detail = { binary_id_redacted: idm ? redactString(idm[1]).slice(0, 60) : null, no_such_file: /No such file/i.test(br[0]) };
+      }
+    }
+  } catch {}
+  report.wf02b_diagnostics = D;
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
@@ -1361,8 +1487,21 @@ async function main() {
             report.image_ok = true;
             report.image_url = panel;
             await screenshot(page, '07-storyboard-review.png');
-          } else { report.image_ok = false; report.errors.push('storyboard review reached but no panel image'); }
-        } else { report.image_ok = false; report.errors.push('storyboard images did not reach the review page before timeout'); }
+          } else {
+            report.image_ok = false; report.errors.push('storyboard review reached but no panel image');
+            // B8AF: review reached but no image — capture WHICH layer failed.
+            try { await captureDomSummary(page, 'storyboard-review-no-image-dom.json'); } catch {}
+            await screenshot(page, '07b-storyboard-no-image.png');
+            try { collectWf02bDiagnostics(report); } catch {}
+            report.review_page_reached = true;
+            report.review_panel_image_present = false;
+          }
+        } else {
+          report.image_ok = false; report.errors.push('storyboard images did not reach the review page before timeout');
+          try { collectWf02bDiagnostics(report); } catch {}
+          report.review_page_reached = false;
+          report.review_panel_image_present = false;
+        }
       } else { report.image_ok = false; report.errors.push('script-review page / #confirm-script-btn not reached'); }
     } else { report.image_ok = false; report.errors.push('WF01 concept did not become selectable before timeout'); }
   } catch (e) {
@@ -1381,6 +1520,10 @@ async function main() {
   try { collectWf01BinaryDiagnostics(report); } catch (e) { report.binary_restore_error = report.binary_restore_error || redactString(String(e.message || e)).slice(0, 200); }
   try { collectWf01ExecutionDiagnostics(report); } catch {}
   try { collectTaskRunnerDiagnostics(report); } catch {}
+  // B8AF: if the front half passed but the storyboard image didn't, capture WF02B.
+  if (report.script_confirmed_via_ui && !report.storyboard_image_generated_via_ui && !report.wf02b_diagnostics) {
+    try { collectWf02bDiagnostics(report); } catch {}
+  }
   if (report.forbidden_requests_blocked.length > 0) { fail('forbidden_request', new Error('forbidden video/Veo request attempted'), apiKey); return; }
   if (report.storyboard_image_generated_via_ui === true && report.image_ok === true) {
     report.status = 'passed';

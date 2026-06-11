@@ -1009,7 +1009,7 @@ test('B8V: still no direct config write / no Veo/video/final / no fake success',
 
 const wf01ExecFn = () => {
   const src = readUi();
-  return src.slice(src.indexOf('function collectWf01ExecutionDiagnostics'), src.indexOf('// ── Diagnostics ──'));
+  return src.slice(src.indexOf('function collectWf01ExecutionDiagnostics'), src.indexOf('function collectTaskRunnerDiagnostics'));
 };
 
 test('B8X1: report exposes a wf01_diagnostics object with all the hard execution fields', () => {
@@ -1141,7 +1141,7 @@ test('B8Z: smoke wf01_diagnostics adds config-visibility fields (presence/path o
 
 test('B8Z: json_parse_error is no longer a broad full-text scan (B8X1 false-positive fix)', () => {
   const src = readUi();
-  const fn = src.slice(src.indexOf('function collectWf01ExecutionDiagnostics'), src.indexOf('// ── Diagnostics ──'));
+  const fn = src.slice(src.indexOf('function collectWf01ExecutionDiagnostics'), src.indexOf('function collectTaskRunnerDiagnostics'));
   // The over-broad text scan that set json_parse_error from the whole execution data is gone.
   assert.ok(!/D\.json_parse_error = \/Unexpected token[^\n]*\.test\(text\)/.test(fn), 'must not scan the whole execution text');
   // It is set ONLY from a real parse-error error_message.
@@ -1166,7 +1166,7 @@ const taskRunnerFn = () => {
 };
 const conceptOutFn = () => {
   const src = readUi();
-  return src.slice(src.indexOf('async function collectConceptOutputDiagnostics'), src.indexOf('// ── Diagnostics ──'));
+  return src.slice(src.indexOf('async function collectConceptOutputDiagnostics'), src.indexOf('// B8AF: read-only'));
 };
 
 test('B8AB: report adds task_runner_diagnostics + wf01_concept_output', () => {
@@ -1286,4 +1286,82 @@ test('B8AD: smoke records workflow-data path-unification diagnostics (write vs r
   assert.ok(/path_mismatch_detected = Boolean\(D\.concept_context_mac_fallback_file_exists && !D\.concept_context_read_file_exists\)/.test(src),
     'path_mismatch_detected = mac-has && !read-has');
   assert.ok(!/concept_context_read_file_exists = .*readFileSync/.test(src), 'must not read file contents (existsSync only)');
+});
+
+// ── P14-B8AF: WF02B storyboard-image diagnostics (read-only) ───────────────────
+
+const wf02bFn = () => {
+  const src = readUi();
+  return src.slice(src.indexOf('function collectWf02bDiagnostics'), src.indexOf('// ── Diagnostics ──'));
+};
+
+test('B8AF: report has wf02b_diagnostics and it is captured when storyboard image is missing', () => {
+  const src = readUi();
+  assert.ok(/wf02b_diagnostics: null/.test(src), 'report inits wf02b_diagnostics');
+  // Captured in the "review reached but no panel image" + "did not reach review" branches.
+  assert.ok(/storyboard review reached but no panel image[\s\S]{0,400}collectWf02bDiagnostics\(report\)/.test(src),
+    'must run WF02B diagnostics when review has no panel image');
+  assert.ok(/did not reach the review page before timeout[\s\S]{0,160}collectWf02bDiagnostics\(report\)/.test(src),
+    'must run WF02B diagnostics when review not reached');
+});
+
+test('B8AF: WF02B execution diagnostics (status/last-node/error) are read-only for storyboardGenerateV1', () => {
+  const fn = wf02bFn();
+  for (const f of ['wf02b_execution_id', 'wf02b_workflow_name', 'wf02b_status', 'wf02b_last_node_executed', 'wf02b_error_node', 'wf02b_error_message', 'wf02b_error_type', 'wf02b_classification']) {
+    assert.ok(fn.includes(f), `must include ${f}`);
+  }
+  assert.ok(/storyboardGenerateV1/.test(fn), 'must query the storyboardGenerateV1 workflow');
+  assert.ok(/SELECT /.test(fn) && !/\b(INSERT|UPDATE|DELETE|DROP)\b/.test(fn), 'must be SELECT-only (read-only)');
+});
+
+test('B8AF: Nano/image API diagnostics — nano_call_seen is evidence-based, http_status not guessed', () => {
+  const fn = wf02bFn();
+  for (const f of ['nano_call_seen', 'nano_http_status', 'nano_model_name', 'nano_response_redacted_summary', 'nano_error_message', 'image_api_called_before_failure']) {
+    assert.ok(fn.includes(f), `must include ${f}`);
+  }
+  // nano_call_seen comes from real evidence (request/response files OR an httpCode), not a guess.
+  assert.ok(/image_api_called_before_failure = has\(path\.join\(CACHE, 'gemini-requests'\)\) \|\| has\(path\.join\(CACHE, 'gemini-responses'\)\)/.test(fn),
+    'image_api_called_before_failure from request/response files');
+  assert.ok(/nano_call_seen: false/.test(fn), 'nano_call_seen defaults false (not "image failed")');
+  assert.ok(!/nano_http_status = (401|403|429|500)\b/.test(fn), 'must not guess a Nano HTTP status');
+});
+
+test('B8AF: task-runner + binary-restore diagnostics name counts/ids/reasons and the binary detail', () => {
+  const fn = wf02bFn();
+  assert.ok(/rejected_task_count:/.test(fn) && /offer_expired_count:/.test(fn) && /rejected_task_ids:/.test(fn) && /runner_reject_reasons:/.test(fn),
+    'task-runner counts/ids/reasons present');
+  assert.ok(/binary_restore_error =/.test(fn) && /binary_id_redacted/.test(fn), 'binary restore error + redacted binary id');
+  assert.ok(/Failed to restore binary data/.test(fn), 'must scan the binary-restore log line');
+});
+
+test('B8AF: storyboard image write-vs-read path diagnostics + Windows Mac-fallback detection', () => {
+  const fn = wf02bFn();
+  for (const f of ['storyboard_image_generated', 'storyboard_image_write_dir', 'storyboard_image_write_file_exists', 'panel_preview_read_dir', 'panel_preview_file_exists', 'storyboard_path_mismatch_detected', 'mac_fallback_image_exists_on_windows']) {
+    assert.ok(fn.includes(f), `must include ${f}`);
+  }
+  assert.ok(/'nanobanana'/.test(fn) && /'分镜图裁剪', 'previews'/.test(fn), 'checks the nanobanana write dir + 分镜图裁剪 preview read dir');
+  // MAC_CACHE (= os.homedir()/Library/Application Support/…) drives the residual-Mac check on win32.
+  assert.ok(/MAC_CACHE = path\.join\(os\.homedir\(\), 'Library', 'Application Support'/.test(fn), 'defines the Mac cache base');
+  assert.ok(/mac_fallback_image_exists_on_windows = process\.platform === 'win32'[\s\S]{0,160}MAC_CACHE, 'nanobanana'/.test(fn), 'detects a residual Mac-fallback image on Windows');
+});
+
+test('B8AF: WF02B diagnostics are REDACTED — no key/Auth/full prompt/full response/base64', () => {
+  const fn = wf02bFn();
+  assert.ok(/nano_response_redacted_summary = redactString\(raw\)\.slice\(0, 200\)/.test(fn), 'Nano response is redacted + truncated');
+  assert.ok(/wf02b_error_message = redactString/.test(fn), 'error message redacted');
+  assert.ok(!/base64/.test(fn), 'must not reference base64 values');
+  assert.ok(!/Authorization|api_key|bearer/i.test(fn), 'must not read Authorization/api_key');
+  // Stop-proof flags intact.
+  const src = readUi();
+  assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
+});
+
+test('B8AF: this phase is diagnostics-only — no workflow/runner/launcher business change', () => {
+  // WF JSONs path-audit (from B8AD) must still hold and not be re-touched for business.
+  for (const f of WF_FILES) {
+    const raw = fs.readFileSync(f, 'utf8');
+    const macLines = (raw.match(/homedir\(\), 'Library', 'Application Support', 'AI Video', '(?:workflow-data|config)'/g) || []).length;
+    const guarded = (raw.match(/platform === 'win32'[\s\S]{0,400}?homedir\(\), 'Library', 'Application Support', 'AI Video', '(?:workflow-data|config)'/g) || []).length;
+    assert.equal(macLines - guarded, 0, `${path.basename(f)} must still be Windows-safe`);
+  }
 });
