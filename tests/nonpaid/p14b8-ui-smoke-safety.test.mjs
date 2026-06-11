@@ -1085,3 +1085,75 @@ test('B8X1: existing B8V binary diagnostics + B8T/Veo defenses are preserved', (
   assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
   assert.ok(!/writeFileSync\([^)]*local-config\.json/.test(src), 'no direct local-config write');
 });
+
+// ── P14-B8Z: WF01 config-key visibility for the n8n Code node (task runner) ────
+
+const WF01_JSON = path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n01.json');
+const wf01Node = () => {
+  const wf = JSON.parse(fs.readFileSync(WF01_JSON, 'utf8'));
+  return (wf.nodes || []).find((n) => n.name && n.name.includes('读取创意API配置'));
+};
+
+test('B8Z: WF01 read-config node prioritizes AI_VIDEO_CONFIG_PATH then the WINDOWS unified path', () => {
+  const code = wf01Node().parameters.jsCode;
+  // AI_VIDEO_CONFIG_PATH is the FIRST candidate.
+  assert.ok(/CONFIG_CANDIDATES = \[\s*\n\s*process\.env\.AI_VIDEO_CONFIG_PATH,/.test(code), 'AI_VIDEO_CONFIG_PATH must be first');
+  // Windows %APPDATA% + HOME/USERPROFILE + os.homedir AppData\Roaming candidates exist.
+  assert.ok(/process\.env\.APPDATA \? path\.join\(process\.env\.APPDATA, 'AI Video', 'config', 'local-config\.json'\)/.test(code), 'must include the %APPDATA% unified path');
+  assert.ok(/process\.env\.HOME \|\| process\.env\.USERPROFILE/.test(code) && /'AppData', 'Roaming', 'AI Video', 'config'/.test(code),
+    'must include a HOME/USERPROFILE Windows path (the runner keeps HOME)');
+  assert.ok(/os\.homedir\(\), 'AppData', 'Roaming', 'AI Video', 'config'/.test(code), 'must include an os.homedir() Windows path');
+});
+
+test('B8Z: Windows packaged must NOT prefer the Mac path or the dev 版本测试/config path', () => {
+  const code = wf01Node().parameters.jsCode;
+  const appdataIdx = code.indexOf("'AppData', 'Roaming'");
+  const macIdx = code.indexOf("'Library', 'Application Support'");
+  const devIdx = code.indexOf("'版本测试', 'config'");
+  assert.ok(appdataIdx > 0, 'Windows unified path present');
+  assert.ok(macIdx > appdataIdx, 'Mac path must come AFTER the Windows unified paths');
+  assert.ok(devIdx > appdataIdx && devIdx > macIdx, 'the dev 版本测试/config path must be LAST');
+  // It must not fall back to a resources/runtime packaged config as a Windows preferred source.
+  assert.ok(!/resources[\\/]+runtime[\\/]+版本测试/.test(code), 'must not prefer resources/runtime/版本测试 config');
+});
+
+test('B8Z: UI save path == WF01 read path (both the %APPDATA%/AI Video/config/local-config.json unified file)', () => {
+  // The desktop shell injects AI_VIDEO_CONFIG_PATH = <APPDATA>\AI Video\config\local-config.json …
+  const winMain = fs.readFileSync(path.join(ROOT, 'desktop', 'win-main.cjs'), 'utf8');
+  assert.ok(/AI_VIDEO_CONFIG_PATH: layout\.configPath/.test(winMain), 'desktop shell sets AI_VIDEO_CONFIG_PATH');
+  // … the launcher forwards it to the n8n child …
+  const launcher = fs.readFileSync(path.join(ROOT, 'client', 'launcher.mjs'), 'utf8');
+  assert.ok(/AI_VIDEO_CONFIG_PATH: CONFIG_PATH/.test(launcher), 'launcher injects AI_VIDEO_CONFIG_PATH into the n8n child');
+  // … and WF01 reads the same unified config/local-config.json file.
+  const code = wf01Node().parameters.jsCode;
+  assert.ok(/'AI Video', 'config', 'local-config\.json'/.test(code), 'WF01 reads the unified config/local-config.json file');
+});
+
+test('B8Z: smoke wf01_diagnostics adds config-visibility fields (presence/path only)', () => {
+  const src = readUi();
+  for (const f of ['wf01_config_path_used', 'wf01_config_file_exists', 'wf01_config_key_present', 'n8n_env_has_ai_video_config_path', 'task_runner_env_has_ai_video_config_path']) {
+    assert.ok(src.includes(f), `wf01_diagnostics must include ${f}`);
+  }
+  // Computed from configSummary (presence + masked) — never the raw key.
+  assert.ok(/D\.wf01_config_key_present = Boolean\(cs\.key_present\)/.test(src), 'key_present is a boolean from configSummary');
+  assert.ok(!/wf01_config_key_present = .*api_key/.test(src), 'must not put the raw key in the report');
+});
+
+test('B8Z: json_parse_error is no longer a broad full-text scan (B8X1 false-positive fix)', () => {
+  const src = readUi();
+  const fn = src.slice(src.indexOf('function collectWf01ExecutionDiagnostics'), src.indexOf('// ── Diagnostics ──'));
+  // The over-broad text scan that set json_parse_error from the whole execution data is gone.
+  assert.ok(!/D\.json_parse_error = \/Unexpected token[^\n]*\.test\(text\)/.test(fn), 'must not scan the whole execution text');
+  // It is set ONLY from a real parse-error error_message.
+  assert.ok(/json_parse_error = true/.test(fn) && /test\(D\.error_message/.test(fn), 'json_parse_error only from a real error_message');
+  assert.ok(!/\/json\|unexpected token\|not valid JSON\/i\.test\(D\.error_message/.test(fn), 'the loose /json/ match is removed');
+});
+
+test('B8Z: no hardcoded API key, no key in workflow/code; Veo/video/final defenses intact', () => {
+  const code = wf01Node().parameters.jsCode;
+  // No hardcoded key literal in WF01 (sk-…/AIza…/long bearer-ish constant assigned to a key field).
+  assert.ok(!/api_key['"]?\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]/.test(code), 'no hardcoded API key in WF01');
+  assert.ok(code.includes('缺少 Kie API Key'), 'still throws when the key is genuinely missing (no bypass)');
+  const src = readUi();
+  assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
+});

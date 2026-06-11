@@ -407,6 +407,9 @@ function collectWf01ExecutionDiagnostics(report) {
     model_call_seen: false, http_status: null, model_provider: null, model_name: null,
     response_redacted_summary: null, json_parse_error: false,
     input_keys: [], binary_keys: [], binary_local_paths_exist: [],
+    // B8Z: config visibility — where WF01 should read the saved Kie key.
+    wf01_config_path_used: null, wf01_config_file_exists: null, wf01_config_key_present: null,
+    n8n_env_has_ai_video_config_path: null, task_runner_env_has_ai_video_config_path: null,
     task_runner_rejected: false, task_runner_reject_reason: null,
   };
   // Model route (provider/name) from config — these are NOT secrets (the key is not read).
@@ -473,7 +476,8 @@ function collectWf01ExecutionDiagnostics(report) {
         try { D.binary_local_paths_exist.push(fs.existsSync(mm[1])); } catch { D.binary_local_paths_exist.push(false); }
       }
       D.input_keys = [...new Set((text.match(/"(product_name|target_market|target_language|creative_task_type|product_image_count|product_images_\d+|image_\d+_path)"/g) || []).map((s) => s.replace(/"/g, '')))].slice(0, 25);
-      D.json_parse_error = /Unexpected token|Unexpected end of JSON|is not valid JSON|JSON\.parse/i.test(text);
+      // B8Z: json_parse_error must reflect a REAL JSON-parse / model-response error,
+      // not merely the words appearing somewhere in the (large) execution data.
     }
   } catch (e) { if (!D.error_message) D.error_message = redactString(String(e.message || e)).slice(0, 200); }
 
@@ -491,9 +495,19 @@ function collectWf01ExecutionDiagnostics(report) {
       if (/Api/i.test(D.error_type || '')) D.model_call_seen = true;
       const resp = err.cause && err.cause.response;
       if (resp) { try { D.response_redacted_summary = redactString(JSON.stringify(resp)).slice(0, 200); } catch {} }
-      if (/json|unexpected token|not valid JSON/i.test(D.error_message || '')) D.json_parse_error = true;
+      // Real JSON-parse / model-response errors only (not any message mentioning "json").
+      if (/Unexpected token|Unexpected end of JSON|is not valid JSON|JSON\.parse|SyntaxError.*JSON|failed to parse/i.test(D.error_message || '')) D.json_parse_error = true;
     }
   }
+
+  // B8Z: config visibility — confirm the saved key lives at the unified config path
+  // WF01 now reads (presence + masked-via-summary only; the value is never emitted).
+  try {
+    const cs = configSummary();
+    D.wf01_config_path_used = cs.config_path || null;
+    D.wf01_config_file_exists = Boolean(cs.exists);
+    D.wf01_config_key_present = Boolean(cs.key_present);
+  } catch {}
 
   const st = String(D.status || '').toLowerCase();
   if (st === 'success') D.classification = 'succeeded_ui_no_concept';
