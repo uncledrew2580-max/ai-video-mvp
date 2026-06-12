@@ -183,6 +183,7 @@ const report = {
   wf02b_diagnostics: null,              // B8AF: WF02B storyboard-image execution / Nano-call / binary / image-path (redacted)
   review_page_reached: null,            // B8AF: the storyboard review page loaded
   review_panel_image_present: null,     // B8AF: a storyboard panel image was visible on review
+  review_render_diagnostics: null,      // B8AH: decisive review-context↔/local-file↔DOM render proof + downstream audit
   // full-mode pipeline milestones
   brief_submitted_via_ui: false,
   concept_ready_via_ui: false,
@@ -737,6 +738,130 @@ function collectWf02bDiagnostics(report) {
     }
   } catch {}
   report.wf02b_diagnostics = D;
+}
+
+// B8AH: the DECISIVE review-render proof — read the review context the page is showing,
+// confirm the panel record + its panel_preview_path field, the exact preview file, the
+// /local-file URL + its HTTP status (fetched from inside the page), whether the DOM img
+// actually loaded, and an end-to-end write-vs-read path check + a downstream (WF03/video/
+// final/export) contract-audit summary. Read-only; paths/counts/booleans only — no secret.
+async function collectReviewRenderDiagnostics(report, page, uiBase) {
+  const CACHE = path.join(userSupportDir(), 'workflow-data', '.n8n-local-cache');
+  const D = {
+    review_context_path: null, review_context_file_exists: false, review_context_panel_count: null,
+    review_context_panel_image_fields: [],
+    review_panel_image_src: null, review_panel_image_src_status: null,
+    local_file_url: null, local_file_http_status: null, local_file_resolved_path: null,
+    local_file_resolved_path_exists: null, local_file_within_allowed_root: null,
+    preview_file_exact_path: null, preview_file_exists: null, preview_file_size: null,
+    review_dom_img_count: null, review_panel_image_load_error: null,
+    storyboard_image_write_dir: null, storyboard_image_write_exact_path: null,
+    storyboard_image_review_dir: null, storyboard_image_review_exact_path: null,
+    storyboard_path_mismatch_detected: null,
+    downstream_contract_audit_summary: null,
+    wf03_video_context_risk: null, final_video_context_risk: null, export_context_risk: null, local_file_mapping_risk: null,
+  };
+  // 1) which review context is the page showing?
+  try {
+    const u = new URL(page.url());
+    const ctxName = u.searchParams.get('context') || '';
+    if (ctxName && /^review_context_[\w.\-]+\.json$/.test(ctxName)) {
+      const ctxPath = path.join(CACHE, 'review-context', ctxName);
+      D.review_context_path = ctxPath;
+      D.review_context_file_exists = fs.existsSync(ctxPath);
+      if (D.review_context_file_exists) {
+        const ctx = JSON.parse(fs.readFileSync(ctxPath, 'utf8'));
+        const panels = Array.isArray(ctx.panel_review_pack) ? ctx.panel_review_pack : [];
+        D.review_context_panel_count = panels.length;
+        const p0 = panels[0] || {};
+        D.review_context_panel_image_fields = Object.keys(p0).filter((k) => /path|url|preview|image|full/i.test(k)).slice(0, 12);
+        const previewPath = String(p0.panel_preview_path || '');
+        if (previewPath) {
+          D.preview_file_exact_path = previewPath;
+          D.preview_file_exists = fs.existsSync(previewPath);
+          try { D.preview_file_size = D.preview_file_exists ? fs.statSync(previewPath).size : 0; } catch {}
+          D.local_file_url = `/local-file?path=${encodeURIComponent(previewPath)}`;
+          // within-allowed-root mirror of the serve allowlist (read-only check)
+          const roots = [path.join(CACHE, 'videos'), path.join(CACHE, 'final-video'), path.join(CACHE, '分镜图裁剪')].map((r) => path.resolve(r) + path.sep);
+          D.local_file_resolved_path = path.resolve(previewPath);
+          D.local_file_resolved_path_exists = fs.existsSync(D.local_file_resolved_path);
+          D.local_file_within_allowed_root = roots.some((r) => D.local_file_resolved_path.startsWith(r));
+        }
+      }
+    }
+  } catch (e) { D.review_context_error = redactString(String(e.message || e)).slice(0, 160); }
+
+  // 2) does /local-file actually serve it? (fetch the real URL from inside the page)
+  try {
+    if (D.local_file_url) {
+      const st = await page.evaluate(async (u) => {
+        try { const r = await fetch(u, { method: 'GET' }); return { status: r.status, type: r.headers.get('content-type') || '' }; }
+        catch (e) { return { status: -1, type: String((e && e.message) || e).slice(0, 80) }; }
+      }, `${uiBase}${D.local_file_url}`).catch(() => null);
+      if (st) { D.local_file_http_status = st.status; D.review_panel_image_src_status = st.status; }
+    }
+  } catch {}
+
+  // 3) DOM image reality — count + the first panel img + its load state/error
+  try {
+    const dom = await page.evaluate((reSrc) => {
+      const PANEL = new RegExp(reSrc, 'i');
+      const SKIP = /logo|favicon|\bicon\b|product-|ui-smoke-product/i;
+      const imgs = Array.from(document.images || []);
+      const panels = imgs.filter((im) => PANEL.test(im.src) && !SKIP.test(im.src));
+      const first = panels[0];
+      return {
+        total: imgs.length, panelCount: panels.length,
+        firstSrc: first ? first.src : null,
+        firstComplete: first ? first.complete : null,
+        firstNaturalWidth: first ? first.naturalWidth : null,
+        firstLoadError: first ? (first.complete && first.naturalWidth === 0) : null,
+      };
+    }, 'panel_preview_|panel_full_|storyboard|nanobanana|local-file').catch(() => null);
+    if (dom) {
+      D.review_dom_img_count = dom.panelCount;
+      D.review_panel_image_src = dom.firstSrc;
+      D.review_panel_image_load_error = dom.firstLoadError === true ? 'img.complete && naturalWidth===0 (load failed)' : (dom.firstLoadError === false ? null : 'no panel img element');
+    }
+  } catch {}
+
+  // 4) write-vs-read EXACT FILE paths (after B8AD both should be %APPDATA%). The
+  // *_dir fields keep the directory; the *_exact_path fields are the actual newest
+  // matching file on disk (so they prove a real file, not just a folder).
+  const newestFile = (dir, re) => {
+    try {
+      if (!fs.existsSync(dir)) return null;
+      const hit = fs.readdirSync(dir)
+        .filter((f) => re.test(f))
+        .map((f) => { const p = path.join(dir, f); let m = 0; try { m = fs.statSync(p).mtimeMs; } catch {} return { p, m }; })
+        .sort((a, b) => b.m - a.m)[0];
+      return hit ? hit.p : null;
+    } catch { return null; }
+  };
+  try {
+    const nanoDir = path.join(CACHE, 'nanobanana');
+    const prevDir = path.join(CACHE, '分镜图裁剪', 'previews');
+    D.storyboard_image_write_dir = nanoDir;
+    D.storyboard_image_review_dir = prevDir;
+    // exact file paths: nanobanana storyboard_*.{png,jpg} and the previews panel_preview_*.jpg.
+    // prefer the context-recorded preview file when present, else the newest on disk.
+    D.storyboard_image_write_exact_path = newestFile(nanoDir, /^storyboard_.*\.(png|jpe?g)$/i);
+    D.storyboard_image_review_exact_path = (D.preview_file_exact_path && fs.existsSync(D.preview_file_exact_path))
+      ? D.preview_file_exact_path
+      : newestFile(prevDir, /^panel_preview_.*\.(jpe?g|png)$/i);
+    const macPrev = path.join(os.homedir(), 'Library', 'Application Support', 'AI Video', 'workflow-data', '.n8n-local-cache', '分镜图裁剪', 'previews');
+    const macHas = (() => { try { return fs.existsSync(macPrev) && fs.readdirSync(macPrev).some((f) => /^panel_preview_/.test(f)); } catch { return false; } })();
+    const winHas = D.preview_file_exists === true || Boolean(D.storyboard_image_review_exact_path);
+    D.storyboard_path_mismatch_detected = Boolean(process.platform === 'win32' && macHas && !winHas);
+  } catch {}
+
+  // 5) downstream contract audit (static, derived from the known field/route map)
+  D.wf03_video_context_risk = 'low: WF03 writes video_path under .n8n-local-cache/videos; serve reads shotProg.video_path via /local-file (root videos allowed)';
+  D.final_video_context_risk = 'low: WF03 writes final_merged_video_path under .n8n-local-cache/final-video; serve reads final_merged_video_path via /local-file (root final-video allowed)';
+  D.export_context_risk = 'low: export/open-folder uses the same review-progress/export context fields; no separate file-URL map';
+  D.local_file_mapping_risk = 'low: single /local-file handler + isAllowedLocalAssetPath allowlist (ROOT, videos, final-video, 分镜图裁剪); ext-gated to mp4/mov/webm/png/jpg/jpeg; rejects out-of-root';
+  D.downstream_contract_audit_summary = 'storyboard(panel_preview_path), video(video_path), final(final_merged_video_path) all use one /local-file URL builder + one allowlist; field names match write↔read; Windows %APPDATA% + 中文(分镜图裁剪) paths URL-encoded then decoded by URL.searchParams';
+  report.review_render_diagnostics = D;
 }
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────
@@ -1474,33 +1599,57 @@ async function main() {
         await page.waitForURL(/\/storyboard-status/, { timeout: 60000 }).catch(() => {});
         const onReview = await page.waitForURL(/\/reviews\/item/, { timeout: 4 * 60 * 1000 }).then(() => true).catch(() => false);
         if (onReview || /\/reviews\/item/.test(page.url())) {
-          const panel = await page.evaluate(() => {
-            const PANEL = /panel_preview_|panel_full_|storyboard|nanobanana|review_context/i;
+          report.review_page_reached = true;
+          // B8AH: the storyboard panel previews render as <img loading="lazy"> served
+          // over /local-file — so they are NOT loaded the instant we reach the page.
+          // FIRST trigger lazy-load (scroll into view + force eager) and WAIT for a panel
+          // image to actually finish loading, only THEN judge. Never declare "no image"
+          // before the network images have had a chance to load.
+          const PANEL_SRC = 'panel_preview_|panel_full_|storyboard|nanobanana|local-file';
+          await page.evaluate(() => {
+            try {
+              for (const im of Array.from(document.images || [])) {
+                try { im.loading = 'eager'; im.scrollIntoView({ block: 'center' }); } catch {}
+              }
+              window.scrollTo(0, document.body.scrollHeight);
+            } catch {}
+          }).catch(() => {});
+          await page.waitForFunction((reSrc) => {
+            const PANEL = new RegExp(reSrc, 'i');
             const SKIP = /logo|favicon|\bicon\b|product-|ui-smoke-product/i;
-            const imgs = Array.from(document.images || []);
-            const hit = imgs.find((im) => PANEL.test(im.src) && !SKIP.test(im.src) && im.naturalWidth > 16);
+            return Array.from(document.images || []).some((im) => PANEL.test(im.src) && !SKIP.test(im.src) && im.complete && im.naturalWidth > 16);
+          }, PANEL_SRC, { timeout: 90000 }).catch(() => {});
+          const panel = await page.evaluate((reSrc) => {
+            const PANEL = new RegExp(reSrc, 'i');
+            const SKIP = /logo|favicon|\bicon\b|product-|ui-smoke-product/i;
+            const hit = Array.from(document.images || []).find((im) => PANEL.test(im.src) && !SKIP.test(im.src) && im.naturalWidth > 16);
             return hit ? hit.src : null;
-          }).catch(() => null);
+          }, PANEL_SRC).catch(() => null);
           const reviewText = await page.locator('body').innerText().catch(() => '');
           if (panel && /分镜审核|分镜图/.test(reviewText)) {
             report.storyboard_image_generated_via_ui = true;
             report.image_ok = true;
             report.image_url = panel;
+            report.review_panel_image_present = true;
             await screenshot(page, '07-storyboard-review.png');
+            // B8AH: capture the render diagnostics on SUCCESS too (proves /local-file 200,
+            // exact file paths, DOM load) — must NOT flip review_panel_image_present.
+            try { await collectReviewRenderDiagnostics(report, page, uiBase); } catch {}
           } else {
             report.image_ok = false; report.errors.push('storyboard review reached but no panel image');
-            // B8AF: review reached but no image — capture WHICH layer failed.
+            report.review_panel_image_present = false;
+            // B8AF/B8AH: review reached but no image — capture WHICH layer failed.
             try { await captureDomSummary(page, 'storyboard-review-no-image-dom.json'); } catch {}
             await screenshot(page, '07b-storyboard-no-image.png');
             try { collectWf02bDiagnostics(report); } catch {}
-            report.review_page_reached = true;
-            report.review_panel_image_present = false;
+            try { await collectReviewRenderDiagnostics(report, page, uiBase); } catch {}
           }
         } else {
           report.image_ok = false; report.errors.push('storyboard images did not reach the review page before timeout');
-          try { collectWf02bDiagnostics(report); } catch {}
           report.review_page_reached = false;
           report.review_panel_image_present = false;
+          try { collectWf02bDiagnostics(report); } catch {}
+          try { await collectReviewRenderDiagnostics(report, page, uiBase); } catch {}
         }
       } else { report.image_ok = false; report.errors.push('script-review page / #confirm-script-btn not reached'); }
     } else { report.image_ok = false; report.errors.push('WF01 concept did not become selectable before timeout'); }

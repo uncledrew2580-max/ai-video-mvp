@@ -1365,3 +1365,110 @@ test('B8AF: this phase is diagnostics-only — no workflow/runner/launcher busin
     assert.equal(macLines - guarded, 0, `${path.basename(f)} must still be Windows-safe`);
   }
 });
+
+// ── P14-B8AH: review panel-image render (lazy-load wait) + decisive diagnostics ──
+
+const renderFn = () => {
+  const src = readUi();
+  return src.slice(src.indexOf('async function collectReviewRenderDiagnostics'), src.indexOf('// ── Diagnostics ──'));
+};
+
+test('B8AH: review judging WAITS for lazy/async panel images to load before failing', () => {
+  const src = readUi();
+  // Must force eager + scroll into view, then waitForFunction on complete && naturalWidth>16.
+  assert.ok(/loading = 'eager'[\s\S]{0,80}scrollIntoView/.test(src), 'must trigger lazy-load (eager + scrollIntoView)');
+  assert.ok(/waitForFunction\([\s\S]{0,400}im\.complete && im\.naturalWidth > 16[\s\S]{0,120}timeout: 90000/.test(src),
+    'must waitForFunction(panel img complete && naturalWidth>16) with a real timeout before judging');
+  // It must NOT declare no-image without that wait (the wait precedes the panel find).
+  assert.ok(src.indexOf('waitForFunction') < src.indexOf("errors.push('storyboard review reached but no panel image')"),
+    'the load-wait must come before the no-image verdict');
+});
+
+test('B8AH: on no panel image, review-render diagnostics are captured (both branches)', () => {
+  const src = readUi();
+  assert.ok(/review_render_diagnostics: null/.test(src), 'report inits review_render_diagnostics');
+  assert.ok(/storyboard review reached but no panel image[\s\S]{0,400}collectReviewRenderDiagnostics\(report, page, uiBase\)/.test(src),
+    'review-render diagnostics run when review reached but no image');
+  assert.ok(/did not reach the review page before timeout[\s\S]{0,200}collectReviewRenderDiagnostics\(report, page, uiBase\)/.test(src),
+    'review-render diagnostics run when review not reached');
+});
+
+test('B8AH: review-render diagnostics expose the full context↔/local-file↔DOM chain', () => {
+  const fn = renderFn();
+  for (const f of [
+    'review_context_path', 'review_context_file_exists', 'review_context_panel_count', 'review_context_panel_image_fields',
+    'review_panel_image_src', 'review_panel_image_src_status', 'local_file_url', 'local_file_http_status',
+    'local_file_resolved_path', 'local_file_resolved_path_exists', 'local_file_within_allowed_root',
+    'preview_file_exact_path', 'preview_file_exists', 'preview_file_size', 'review_dom_img_count',
+    'review_panel_image_load_error', 'storyboard_image_write_dir', 'storyboard_image_write_exact_path',
+    'storyboard_image_review_dir', 'storyboard_image_review_exact_path',
+    'storyboard_path_mismatch_detected', 'downstream_contract_audit_summary',
+    'wf03_video_context_risk', 'final_video_context_risk', 'export_context_risk', 'local_file_mapping_risk',
+  ]) {
+    assert.ok(fn.includes(f), `review_render_diagnostics must include ${f}`);
+  }
+});
+
+test('B8AH: storyboard_image_*_exact_path are ACTUAL FILES (newest match), dirs kept under *_dir', () => {
+  const fn = renderFn();
+  // The exact-path fields resolve to a real newest file, NOT a directory.
+  assert.ok(/const newestFile = \(dir, re\)/.test(fn), 'has a newest-matching-file helper');
+  assert.ok(/storyboard_image_write_exact_path = newestFile\(nanoDir, \/\^storyboard_\.\*\\\.\(png\|jpe\?g\)\$\/i\)/.test(fn),
+    'write exact path = newest nanobanana storyboard_*.{png,jpg} file');
+  assert.ok(/storyboard_image_review_exact_path = \(D\.preview_file_exact_path[\s\S]{0,120}newestFile\(prevDir, \/\^panel_preview_/.test(fn),
+    'review exact path = context preview file or newest panel_preview_* file');
+  // Directories are preserved separately (not conflated with the exact-file fields).
+  assert.ok(/D\.storyboard_image_write_dir = nanoDir/.test(fn) && /D\.storyboard_image_review_dir = prevDir/.test(fn),
+    'the *_dir fields hold the directories');
+  // Guard: the exact-path fields must NOT be assigned a bare directory.
+  assert.ok(!/storyboard_image_write_exact_path = (path\.join\(CACHE, 'nanobanana'\)|nanoDir)\b/.test(fn), 'write exact path is not a bare dir');
+  assert.ok(!/storyboard_image_review_exact_path = (path\.join\(CACHE, '分镜图裁剪', 'previews'\)|prevDir)\b/.test(fn), 'review exact path is not a bare dir');
+});
+
+test('B8AH: review-render diagnostics are also captured on the SUCCESS branch (must not flip the flag)', () => {
+  const src = readUi();
+  // On success: review_panel_image_present=true, then collectReviewRenderDiagnostics runs.
+  assert.ok(/review_panel_image_present = true;[\s\S]{0,400}await collectReviewRenderDiagnostics\(report, page, uiBase\)/.test(src),
+    'success branch must also run collectReviewRenderDiagnostics after setting the flag true');
+  // The helper must not assign review_panel_image_present (so success stays true).
+  const fn = renderFn();
+  assert.ok(!/review_panel_image_present\s*=/.test(fn), 'collectReviewRenderDiagnostics must not mutate review_panel_image_present');
+});
+
+test('B8AH: /local-file status is the REAL fetched status (not guessed) + reads panel_preview_path', () => {
+  const fn = renderFn();
+  assert.ok(/await fetch\(u, \{ method: 'GET' \}\)[\s\S]{0,60}r\.status/.test(fn), 'http status from a real fetch of the /local-file URL');
+  assert.ok(/panel_preview_path/.test(fn), 'reads the panel_preview_path field (the serve read-field)');
+  assert.ok(/review_context_[\\\w.\-]/.test(fn) || /review_context_/.test(fn), 'binds to the review_context file the page shows');
+  assert.ok(!/local_file_http_status = (200|404)\b/.test(fn), 'must not hardcode an HTTP status');
+});
+
+test('B8AH: the within-allowed-root mirror matches the serve allowlist (videos/final-video/分镜图裁剪)', () => {
+  const fn = renderFn();
+  assert.ok(/'videos'[\s\S]{0,40}'final-video'[\s\S]{0,40}'分镜图裁剪'/.test(fn), 'mirrors the serve allowlist roots');
+  assert.ok(/path\.resolve\(r\) \+ path\.sep/.test(fn) && /startsWith\(r\)/.test(fn), 'startsWith(resolved root + sep) — same prefix-safe check as the serve');
+  // Confirm the serve handler itself rejects out-of-root + ext-gates (contract lock).
+  const serve = readServe();
+  assert.ok(/isAllowedLocalAssetPath\(filePath\)/.test(serve) && /res\.writeHead\(404\)/.test(serve), 'serve /local-file gates on isAllowedLocalAssetPath + 404');
+  assert.ok(/allowedRoots\.some\(\(root\) => resolved\.startsWith\(root\)\)/.test(serve), 'serve allowlist uses startsWith(root)');
+});
+
+test('B8AH: review-render diagnostics are redacted/read-only and keep Veo/video/final safety', () => {
+  const fn = renderFn();
+  assert.ok(!/\b(INSERT|UPDATE|DELETE|DROP)\b/.test(fn), 'no DB writes');
+  assert.ok(!/Authorization|api_key|bearer/i.test(fn), 'no Authorization/api_key reads');
+  assert.ok(!/base64/.test(fn), 'no base64 / file contents');
+  assert.ok(/redactString\(String\(e\.message/.test(fn), 'errors are redacted');
+  const src = readUi();
+  assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
+});
+
+test('B8AH: downstream WF03/video/final contract matches the serve read-fields (audit lock)', () => {
+  // WF03 writes video_path + final_merged_video_path; the serve reads those same names.
+  const wf03 = fs.readFileSync(path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n03.json'), 'utf8');
+  const serve = readServe();
+  assert.ok(/video_path/.test(wf03) && /shotProg\.video_path|\.video_path/.test(serve), 'video_path write↔read match');
+  assert.ok(/final_merged_video_path/.test(wf03) && /final_merged_video_path/.test(serve), 'final_merged_video_path write↔read match');
+  // /local-file allowlist must include the video + final roots so those are servable.
+  assert.ok(/'videos'\)[\s\S]{0,60}'final-video'\)/.test(serve), 'allowlist includes videos + final-video roots');
+});
