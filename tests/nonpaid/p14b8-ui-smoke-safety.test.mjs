@@ -17,9 +17,14 @@ const UI_SCRIPT = path.join(ROOT, 'scripts', 'win', 'ui-smoke-image-only.mjs');
 const SMOKE_GUARD = path.join(ROOT, 'scripts', 'win', 'smoke-guard.mjs');
 const SERVE = path.join(ROOT, '版本测试', 'serve-review-assets.mjs');
 
-const readWf = () => fs.readFileSync(WORKFLOW, 'utf8');
-const readUi = () => fs.readFileSync(UI_SCRIPT, 'utf8');
-const readServe = () => fs.readFileSync(SERVE, 'utf8');
+// Normalize CRLF→LF: on Windows the repo checks out with \r\n, which would make
+// `[\s\S]{0,N}` byte-windows count an extra \r per line and tip borderline matches
+// over. Reading source LF-normalized keeps every regex-window assertion deterministic
+// across platforms.
+const readSrc = (p) => fs.readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
+const readWf = () => readSrc(WORKFLOW);
+const readUi = () => readSrc(UI_SCRIPT);
+const readServe = () => readSrc(SERVE);
 
 // ── Workflow trigger / scope ──────────────────────────────────────────────────
 
