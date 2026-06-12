@@ -24,6 +24,7 @@
 
 import {
   assertImageOnlyScope,
+  guardExport,
   guardFinalMerge,
   guardReviewRerunShot,
   guardReviewSubmit,
@@ -31,10 +32,15 @@ import {
   guardVeo,
   guardVideoGeneration,
   selfTest,
+  smokeScope,
+  videoGenerationAllowed,
 } from './smoke-guard.mjs';
 
 // ── Safety: MUST be the first code executed ───────────────────────────────────
+// Scope-aware: image_only (default) forbids all video; minimal_video allows EXACTLY one
+// clip (video generation only) and still forbids final-merge + export.
 assertImageOnlyScope();
+const VIDEO_AUTHORIZED = videoGenerationAllowed(process.env);
 selfTest();
 
 import fs from 'node:fs';
@@ -79,17 +85,29 @@ const DIAG_DIR = path.join(OUT_DIR, 'smoke-diagnostics');
 const SHOTS_DIR = path.join(DIAG_DIR, 'screenshots');
 fs.mkdirSync(SHOTS_DIR, { recursive: true });
 
-// Renderer requests that would start video must never fire in an image-only run.
-const FORBIDDEN_REQUEST = [
-  /review-submit/i,
+// final-merge / export / rerun-shot must NEVER fire in ANY smoke scope.
+const ALWAYS_FORBIDDEN_REQUEST = [
+  /final-merge/i,
+  /mergeWithAudio/i,
   /review-rerun-shot/i,
+  /\/api\/export-project/i,
+  /\/api\/export-diagnostics/i,
+];
+// Video-generation triggers: forbidden in image_only; ALLOWED in minimal_video (which
+// produces exactly one capped clip). Submitting the storyboard (/review-submit →
+// reviewSubmitVeoV2) is how the single clip is generated.
+const VIDEO_TRIGGER_REQUEST = [
+  /review-submit/i,
   /reviewSubmitVeoV2/i,
   /\/v1\/veo/i,
   /veo\/generate/i,
   /image[_-]?to[_-]?video/i,
-  /final-merge/i,
-  /mergeWithAudio/i,
 ];
+// The effective block-list for THIS run: always-forbidden, plus the video triggers unless
+// a single video clip is explicitly authorized.
+const FORBIDDEN_REQUEST = VIDEO_AUTHORIZED
+  ? ALWAYS_FORBIDDEN_REQUEST
+  : [...ALWAYS_FORBIDDEN_REQUEST, ...VIDEO_TRIGGER_REQUEST];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -101,7 +119,7 @@ let electronProc = null;
 let finalized = false;
 
 const report = {
-  scope: 'image_only',
+  scope: smokeScope(),
   ui_driven: true,
   mode: MODE,
   real_smoke_scope: process.env.REAL_SMOKE_SCOPE,
@@ -193,11 +211,31 @@ const report = {
   storyboard_image_generated_via_ui: false,
   image_ok: null,
   image_url: null,
-  // stop-proof — we never reach video in either mode
+  // stop-proof — image_only never reaches video; minimal_video reaches EXACTLY one clip.
   video_generation_skipped: true,
   veo_not_called: true,
   final_merge_not_called: true,
   stopped_at: FULL ? 'storyboard_ready_for_review' : 'diagnostic_no_generation',
+  // ── B8AJ0: minimal_video scope (default image_only → all below stay safe/false) ──
+  smoke_scope: smokeScope(),
+  allow_video_generation: process.env.ALLOW_VIDEO_GENERATION === 'true',
+  max_shots: Number(process.env.MAX_SHOTS || 0),
+  video_generation_attempted: false,
+  video_model_called: false,
+  video_http_status: null,
+  video_response_redacted_summary: null,
+  video_clip_generated: false,
+  video_clip_path: null,
+  video_clip_file_exists: false,
+  video_clip_duration: null,
+  video_clip_size_bytes: null,
+  video_save_path_allowed: null,
+  final_merge_called: false,
+  export_called: false,
+  video_error_message: null,
+  video_skipped_reason: VIDEO_AUTHORIZED ? null : 'scope_image_only',
+  video_cap_file_written: null,
+  video_submit_status: null,
   api_key_leaked: false,
   forbidden_requests_blocked: [],
   stages: [],
@@ -864,6 +902,104 @@ async function collectReviewRenderDiagnostics(report, page, uiBase) {
   report.review_render_diagnostics = D;
 }
 
+// ── B8AJ0: minimal_video (EXACTLY one video clip via the real UI) ──────────────
+function videoCacheDir() { return path.join(userSupportDir(), 'workflow-data', '.n8n-local-cache', 'videos'); }
+
+// Minimal, dependency-free mp4 duration (seconds) from the moov/mvhd box. Returns null
+// if it can't be parsed — size is the authoritative "a real clip exists" signal.
+function readMp4DurationSec(filePath) {
+  try {
+    const buf = fs.readFileSync(filePath);
+    const idx = buf.indexOf(Buffer.from('mvhd'));
+    if (idx < 0) return null;
+    const version = buf[idx + 4];
+    let timescale; let duration;
+    if (version === 1) { timescale = buf.readUInt32BE(idx + 24); duration = Number(buf.readBigUInt64BE(idx + 28)); }
+    else { timescale = buf.readUInt32BE(idx + 16); duration = buf.readUInt32BE(idx + 20); }
+    if (timescale > 0 && duration > 0) return Math.round((duration / timescale) * 100) / 100;
+  } catch {}
+  return null;
+}
+
+// Read the WF03 (reviewSubmitVeoV2) execution — redacted — for model-called / http / error.
+function collectVideoDiagnostics(report) {
+  try {
+    const dbPath = path.join(userSupportDir(), 'workflow-data', '.n8n', 'database.sqlite');
+    if (!fs.existsSync(dbPath)) return;
+    const rows = JSON.parse(runSqlite(['-json', dbPath, `SELECT id, status FROM execution_entity WHERE "workflowId"='reviewSubmitVeoV2' ORDER BY id DESC LIMIT 1;`], { encoding: 'utf8' }) || '[]');
+    const ex = rows[0];
+    if (!ex) return;
+    const d = JSON.parse(runSqlite(['-json', dbPath, `SELECT data FROM execution_data WHERE "executionId"=${Number(ex.id)} LIMIT 1;`], { encoding: 'utf8' }) || '[]');
+    const dataStr = d[0] ? String(d[0].data || '') : '';
+    let parsed = null; let text = dataStr; try { parsed = _require('flatted').parse(dataStr); text = JSON.stringify(parsed); } catch {}
+    if (parsed && parsed.resultData && parsed.resultData.error) {
+      const err = parsed.resultData.error;
+      report.video_error_message = redactString(String(err.message || '')).slice(0, 300);
+      const hc = err.httpCode || (err.cause && (err.cause.httpCode || (err.cause.response && err.cause.response.status))) || null;
+      if (hc != null) { report.video_http_status = Number(hc); report.video_model_called = true; }
+    }
+    const hm = text.match(/HTTP (\d{3})[:\s]/); if (hm && report.video_http_status == null) { report.video_http_status = Number(hm[1]); report.video_model_called = true; }
+    // a redacted one-line response summary (no full response / no key)
+    const sm = text.match(/"(?:operationName|name|taskId|videoUrl|status)"\s*:\s*"[^"]{0,40}"/);
+    if (sm) report.video_response_redacted_summary = redactString(sm[0]).slice(0, 160);
+  } catch {}
+}
+
+// Generate exactly ONE clip: write the 1-shot cap marker, click the real "确认分镜图 →
+// 开始生成视频" button, wait for the single new mp4 to land, verify it. final-merge /
+// export are NEVER triggered (and the interceptor still aborts them).
+async function runMinimalVideo(report, page, uiBase, apiKey) {
+  if (report.review_panel_image_present !== true) { report.video_skipped_reason = 'review_panel_missing_before_video'; return; }
+  // 1) test-only cap marker WF03 reads (production never writes this → no cap).
+  const capDir = path.join(userSupportDir(), 'workflow-data', '.n8n-local-cache');
+  try { fs.mkdirSync(capDir, { recursive: true }); fs.writeFileSync(path.join(capDir, '.smoke-max-shots'), String(report.max_shots || 1)); report.video_cap_file_written = true; }
+  catch (e) { report.video_cap_file_written = false; report.video_error_message = redactString(String(e.message || e)).slice(0, 200); }
+  // 2) snapshot existing clips so we detect the NEW one (not a stale file).
+  const vDir = videoCacheDir();
+  const before = new Set();
+  try { if (fs.existsSync(vDir)) for (const f of fs.readdirSync(vDir)) if (/\.mp4$/i.test(f)) before.add(f); } catch {}
+  // 3) click the REAL generate button (form action=/review-submit, NOT the 重做 form).
+  const submitResp = page.waitForResponse((r) => /\/review-submit\b/.test(r.url()) && r.request().method() === 'POST', { timeout: 60000 });
+  const clicked = await page.evaluate(() => {
+    const forms = Array.from(document.querySelectorAll('form[action="/review-submit"]'));
+    const genForm = forms.find((f) => !Array.from(f.querySelectorAll('input[name="review_decision"]')).some((i) => i.value === '重做'));
+    const btn = genForm && genForm.querySelector('button[type="submit"]');
+    if (btn) { try { btn.removeAttribute('onclick'); } catch {} btn.click(); return true; }
+    return false;
+  }).catch(() => false);
+  if (!clicked) { report.video_skipped_reason = 'video_button_or_ui_action_missing'; return; }
+  report.video_generation_attempted = true;
+  report.stages.push('video_generation_attempted');
+  const sResp = await submitResp.catch(() => null);
+  report.video_submit_status = sResp ? sResp.status() : null;
+  // 4) wait for the SINGLE new clip (Veo is slow; cap=1 keeps it to one generation).
+  const deadline = Date.now() + 6 * 60 * 1000;
+  let newClip = null;
+  while (Date.now() < deadline) {
+    if (report.forbidden_requests_blocked.length > 0) break;
+    try {
+      if (fs.existsSync(vDir)) {
+        const fresh = fs.readdirSync(vDir).filter((f) => /\.mp4$/i.test(f)).find((f) => !before.has(f));
+        if (fresh) { const p = path.join(vDir, fresh); try { if (fs.statSync(p).size > 0) { newClip = p; break; } } catch {} }
+      }
+    } catch {}
+    await sleep(8000);
+  }
+  // 5) redacted WF03 execution diagnostics (model called / http / error).
+  try { collectVideoDiagnostics(report); } catch {}
+  if (!newClip) { report.video_skipped_reason = report.video_skipped_reason || 'video_file_not_saved'; return; }
+  // 6) verify the single clip.
+  report.video_clip_path = newClip;
+  report.video_clip_file_exists = true;
+  report.video_model_called = true; // a clip on disk implies the Veo call happened
+  try { report.video_clip_size_bytes = fs.statSync(newClip).size; } catch {}
+  report.video_clip_duration = readMp4DurationSec(newClip);
+  const allowedRoot = path.resolve(vDir) + path.sep;
+  report.video_save_path_allowed = path.resolve(newClip).startsWith(allowedRoot);
+  report.video_clip_generated = (report.video_clip_size_bytes || 0) > 0 && report.video_save_path_allowed === true;
+  if (report.video_clip_generated) report.stages.push('video_clip_generated');
+}
+
 // ── Diagnostics ───────────────────────────────────────────────────────────────
 async function screenshot(page, name) {
   try { await page.screenshot({ path: path.join(SHOTS_DIR, name), fullPage: true }); } catch {}
@@ -1025,14 +1161,22 @@ function assertNoKeyLeak(apiKey) {
 function finalize(exitCode, apiKey) {
   if (finalized) return;
   finalized = true;
-  // Stop-proof invariant (P14-B8C): video / Veo / final-merge are ALWAYS reported
-  // as not-called / skipped — even when a forbidden attempt was observed, because
-  // the renderer interceptor ABORTS it (nothing actually executes). The attempt
-  // itself is recorded in forbidden_requests_blocked and fails the run separately.
-  report.video_generation_skipped = true;
-  report.veo_not_called = true;
+  // Stop-proof invariant: final-merge is ALWAYS not-called (no scope ever triggers it).
+  // In image_only, video / Veo are likewise ALWAYS reported skipped/not-called (the
+  // interceptor aborts any attempt; the attempt is recorded in forbidden_requests_blocked
+  // and fails the run separately). In minimal_video the video fields reflect what the
+  // single-clip flow actually observed and are NOT overwritten here.
   report.final_merge_not_called = true;
-  report.stages.push('video_skipped');
+  report.final_merge_called = report.final_merge_called === true; // never set true by us
+  if (!VIDEO_AUTHORIZED) {
+    report.video_generation_skipped = true;
+    report.veo_not_called = true;
+    report.stages.push('video_skipped');
+  } else {
+    report.video_generation_skipped = report.video_clip_generated !== true;
+    report.veo_not_called = report.video_model_called !== true;
+    report.stages.push(report.video_clip_generated ? 'video_clip_generated' : 'video_not_generated');
+  }
   try { exportEnvDiagnostics(); } catch {}
   assertNoKeyLeak(apiKey);
   try { fs.writeFileSync(REPORT_PATH, JSON.stringify(report, null, 2)); } catch {}
@@ -1673,8 +1817,50 @@ async function main() {
   if (report.script_confirmed_via_ui && !report.storyboard_image_generated_via_ui && !report.wf02b_diagnostics) {
     try { collectWf02bDiagnostics(report); } catch {}
   }
+  const storyboardOk = report.storyboard_image_generated_via_ui === true && report.image_ok === true;
+
+  // ── B8AJ0: minimal_video continuation (EXACTLY one clip) ──────────────────────
+  if (VIDEO_AUTHORIZED) {
+    // In minimal_video the video triggers are NOT forbidden; only a final-merge/export
+    // attempt would be in forbidden_requests_blocked — which fails the run below.
+    if (!storyboardOk) {
+      report.error_message = report.error_message || 'storyboard not ready before video';
+      fail('storyboard_ready_restore_failed', new Error(report.error_message), apiKey); return; // B
+    }
+    if (report.review_panel_image_present !== true) {
+      fail('review_panel_missing_before_video', new Error('review panel image missing before video'), apiKey); return; // C
+    }
+    try { await runMinimalVideo(report, page, uiBase, apiKey); }
+    catch (e) { report.video_error_message = report.video_error_message || redactString(String(e.message || e)).slice(0, 300); }
+    // Safety net: a final-merge / export must NEVER have fired.
+    if (report.forbidden_requests_blocked.length > 0) {
+      const f = report.forbidden_requests_blocked.join(' ');
+      if (/final-merge|mergeWithAudio/i.test(f)) { report.final_merge_called = true; fail('final_merge_unexpectedly_called', new Error('final-merge fired during minimal_video'), apiKey); return; } // K
+      if (/export/i.test(f)) { report.export_called = true; fail('export_unexpectedly_called', new Error('export fired during minimal_video'), apiKey); return; } // L
+      fail('forbidden_request', new Error('forbidden request during minimal_video'), apiKey); return;
+    }
+    if (report.video_clip_generated === true && report.video_clip_file_exists === true
+        && report.final_merge_called === false && report.export_called === false) {
+      report.status = 'passed';
+      report.stopped_at = 'minimal_video_one_clip_generated';
+      console.log('[ui-smoke] PASS: one video clip generated (no final-merge, no export).');
+      finalize(0, apiKey); return;
+    }
+    // Classify the minimal_video failure (A–M).
+    let stage = report.video_skipped_reason || 'video_file_not_saved';
+    if (stage === 'review_panel_missing_before_video' || stage === 'video_button_or_ui_action_missing') { /* C / D */ }
+    else if (report.video_http_status && report.video_http_status >= 400) stage = 'video_api_failed'; // F
+    else if (report.video_generation_attempted && report.video_model_called === false && report.video_clip_file_exists === false) stage = 'video_api_not_called'; // E
+    else if (report.video_clip_file_exists === true && report.video_save_path_allowed === false) stage = 'video_path_not_allowed'; // I
+    else if (report.video_clip_file_exists === true && report.video_clip_generated === false) stage = 'video_file_saved_but_ui_not_rendered'; // J
+    else stage = 'video_file_not_saved'; // H
+    report.error_message = report.error_message || report.video_error_message || 'minimal video clip was not generated';
+    fail(stage, new Error(report.error_message), apiKey); return;
+  }
+
+  // ── image_only verdict (default — unchanged) ──────────────────────────────────
   if (report.forbidden_requests_blocked.length > 0) { fail('forbidden_request', new Error('forbidden video/Veo request attempted'), apiKey); return; }
-  if (report.storyboard_image_generated_via_ui === true && report.image_ok === true) {
+  if (storyboardOk) {
     report.status = 'passed';
     report.stopped_at = 'storyboard_ready_for_review';
     console.log('[ui-smoke] PASS: storyboard/Nano image generated (stopped before video).');

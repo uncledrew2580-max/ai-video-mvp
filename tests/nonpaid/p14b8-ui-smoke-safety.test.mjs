@@ -40,10 +40,13 @@ test('workflow triggers ONLY on workflow_dispatch (no push/pull_request/schedule
   assert.ok(!/\n\s*schedule:/.test(yml), 'must NOT have schedule: trigger');
 });
 
-test('workflow env sets image-only scope', () => {
+test('workflow env defaults to image-only scope (video disabled unless explicitly authorized)', () => {
   const yml = readWf();
-  assert.ok(/REAL_SMOKE_SCOPE:\s*image_only/.test(yml), 'must set REAL_SMOKE_SCOPE: image_only');
-  assert.ok(/DISABLE_VIDEO_GENERATION:\s*['"]?true['"]?/.test(yml), "must set DISABLE_VIDEO_GENERATION: 'true'");
+  // REAL_SMOKE_SCOPE defaults to image_only; video is disabled unless minimal_video + allow.
+  assert.ok(/REAL_SMOKE_SCOPE:\s*\$\{\{ inputs\.smoke_scope \|\| 'image_only' \}\}/.test(yml), 'REAL_SMOKE_SCOPE defaults image_only');
+  assert.ok(/DISABLE_VIDEO_GENERATION:\s*\$\{\{ \(inputs\.smoke_scope == 'minimal_video' && inputs\.allow_video_generation == 'true'\) && 'false' \|\| 'true' \}\}/.test(yml),
+    'video disabled by default; only minimal_video + allow_video_generation enables it');
+  assert.ok(/smoke_scope:[\s\S]{0,180}default: 'image_only'/.test(yml), 'smoke_scope input defaults image_only');
 });
 
 test('workflow reads API key ONLY from GitHub Secrets (no hardcoded value)', () => {
@@ -59,10 +62,12 @@ test('workflow masks secrets via ::add-mask::', () => {
   assert.ok(readWf().includes('add-mask'), 'workflow must invoke ::add-mask:: to mask secrets');
 });
 
-test('workflow does NOT reference Veo/video/final-merge/review endpoints', () => {
+test('workflow does NOT hardcode any video/Veo/final-merge/review ENDPOINT string', () => {
   const yml = readWf();
-  for (const bad of ['/v1/veo', 'veo/generate', 'reviewSubmitVeoV2', 'final-merge', 'review-submit', 'review-rerun-shot', 'image_to_video']) {
-    assert.ok(!yml.includes(bad), `workflow must not reference ${bad}`);
+  // The workflow may describe the minimal_video scope in human terms, but must never
+  // contain a raw endpoint/route the smoke could trigger — routing lives in the runner.
+  for (const bad of ['/v1/veo', 'veo/generate', 'reviewSubmitVeoV2', 'final-merge', 'mergeWithAudio', 'review-submit', 'review-rerun-shot', 'image_to_video', '/api/export-project']) {
+    assert.ok(!yml.includes(bad), `workflow must not reference the raw endpoint ${bad}`);
   }
 });
 
@@ -832,9 +837,10 @@ test('B8R1: a no-report run is summarized as "UI smoke not started" (not mislead
   assert.ok(/if-no-files-found: warn/.test(yml), 'upload must warn (not fail/empty) when no report');
 });
 
-test('B8R1: image-only boundaries + dispatch-only trigger are preserved', () => {
+test('B8R1: image-only default + dispatch-only trigger are preserved', () => {
   const yml = readWf();
-  assert.ok(/REAL_SMOKE_SCOPE: image_only/.test(yml) && /DISABLE_VIDEO_GENERATION: 'true'/.test(yml), 'image-only env preserved');
+  assert.ok(/REAL_SMOKE_SCOPE:\s*\$\{\{ inputs\.smoke_scope \|\| 'image_only' \}\}/.test(yml), 'image-only default preserved');
+  assert.ok(/DISABLE_VIDEO_GENERATION:[\s\S]{0,120}&& 'false' \|\| 'true' \}\}/.test(yml), 'video disabled unless explicitly authorized');
   assert.ok(/workflow_dispatch/.test(yml) && !/\n\s*push:/.test(yml) && !/\n\s*schedule:/.test(yml), 'still dispatch-only');
   // The UI smoke runner + the secret-only key path are unchanged.
   assert.ok(/ui-smoke-image-only\.mjs/.test(yml) && /secrets\.AI_VIDEO_API_KEY/.test(yml), 'smoke runner + secret-only key intact');
@@ -1476,4 +1482,131 @@ test('B8AH: downstream WF03/video/final contract matches the serve read-fields (
   assert.ok(/final_merged_video_path/.test(wf03) && /final_merged_video_path/.test(serve), 'final_merged_video_path write↔read match');
   // /local-file allowlist must include the video + final roots so those are servable.
   assert.ok(/'videos'\)[\s\S]{0,60}'final-video'\)/.test(serve), 'allowlist includes videos + final-video roots');
+});
+
+// ── P14-B8AJ0: minimal_video scope (controlled 1-shot video smoke) ────────────
+
+const SECURITY = path.join(ROOT, 'scripts', 'win', 'check-smoke-security.mjs');
+const KEYENV = { AI_VIDEO_API_KEY: 'present' };
+async function gate(env) { const m = await import(pathToFileURL(SECURITY).href); return m.checkSmokeSecurityGate(env); }
+async function guard() { return import(pathToFileURL(SMOKE_GUARD).href); }
+
+test('B8AJ0: workflow default dispatch is still image_only (no video) + has the 5 new inputs', () => {
+  const yml = fs.readFileSync(WORKFLOW, 'utf8');
+  assert.ok(/smoke_scope:[\s\S]{0,200}default: 'image_only'/.test(yml), 'smoke_scope defaults image_only');
+  for (const inp of ['smoke_scope', 'max_shots', 'allow_video_generation', 'allow_final_merge', 'allow_export']) {
+    assert.ok(yml.includes(`${inp}:`), `workflow must define input ${inp}`);
+  }
+  // DISABLE_VIDEO_GENERATION is only 'false' when minimal_video AND allow_video_generation=true.
+  assert.ok(/DISABLE_VIDEO_GENERATION:\s*\$\{\{ \(inputs\.smoke_scope == 'minimal_video' && inputs\.allow_video_generation == 'true'\) && 'false' \|\| 'true' \}\}/.test(yml),
+    'video disabled by default; enabled only for minimal_video + allow_video_generation');
+  // MAX_SHOTS passed through (NOT silently forced) so the gate can FAIL on != 1.
+  assert.ok(/MAX_SHOTS:\s*\$\{\{ inputs\.max_shots \|\| '1' \}\}/.test(yml), 'max_shots passed through');
+});
+
+test('B8AJ0: security gate — image_only default passes; image_only with video-on is rejected', async () => {
+  assert.equal((await gate({ ...KEYENV, REAL_SMOKE_SCOPE: 'image_only', DISABLE_VIDEO_GENERATION: 'true' })).ok, true);
+  assert.equal((await gate({ ...KEYENV, REAL_SMOKE_SCOPE: 'image_only', DISABLE_VIDEO_GENERATION: 'false' })).ok, false);
+  assert.equal((await gate({ ...KEYENV, REAL_SMOKE_SCOPE: 'bogus' })).ok, false);
+});
+
+test('B8AJ0: security gate — minimal_video requires the full invariant set', async () => {
+  const base = { ...KEYENV, REAL_SMOKE_SCOPE: 'minimal_video', ALLOW_VIDEO_GENERATION: 'true', DISABLE_VIDEO_GENERATION: 'false', MAX_SHOTS: '1', ALLOW_FINAL_MERGE: 'false', ALLOW_EXPORT: 'false' };
+  assert.equal((await gate(base)).ok, true, 'valid minimal_video passes');
+  assert.equal((await gate({ ...base, ALLOW_VIDEO_GENERATION: 'false', DISABLE_VIDEO_GENERATION: 'true' })).ok, false, 'must set allow_video_generation=true');
+  assert.equal((await gate({ ...base, MAX_SHOTS: '2' })).ok, false, 'max_shots>1 FAILS');
+  assert.equal((await gate({ ...base, MAX_SHOTS: '0' })).ok, false, 'max_shots!=1 FAILS');
+  assert.equal((await gate({ ...base, ALLOW_FINAL_MERGE: 'true' })).ok, false, 'allow_final_merge=true FAILS');
+  assert.equal((await gate({ ...base, ALLOW_EXPORT: 'true' })).ok, false, 'allow_export=true FAILS');
+});
+
+test('B8AJ0: guard — image_only blocks all; minimal_video allows ONLY video, still blocks final-merge/rerun/export', async () => {
+  const g = await guard();
+  const imgEnv = { REAL_SMOKE_SCOPE: 'image_only', DISABLE_VIDEO_GENERATION: 'true' };
+  assert.throws(() => g.guardVeo('x', imgEnv), 'image_only blocks Veo');
+  assert.throws(() => g.guardVideoGeneration('x', imgEnv), 'image_only blocks video');
+  assert.throws(() => g.guardReviewSubmit('/review-submit', imgEnv), 'image_only blocks review-submit');
+  const vidEnv = { REAL_SMOKE_SCOPE: 'minimal_video', ALLOW_VIDEO_GENERATION: 'true', DISABLE_VIDEO_GENERATION: 'false', MAX_SHOTS: '1', ALLOW_FINAL_MERGE: 'false', ALLOW_EXPORT: 'false' };
+  assert.equal(g.videoGenerationAllowed(vidEnv), true);
+  assert.doesNotThrow(() => g.guardVideoGeneration('x', vidEnv), 'minimal_video allows video');
+  assert.doesNotThrow(() => g.guardReviewSubmit('/review-submit', vidEnv), 'minimal_video allows review-submit (the trigger)');
+  // final-merge / rerun / export ALWAYS throw — even under a valid minimal_video env.
+  assert.throws(() => g.guardFinalMerge(), 'final-merge always blocked');
+  assert.throws(() => g.guardReviewRerunShot(), 'rerun-shot always blocked');
+  assert.throws(() => g.guardExport('/api/export-project'), 'export always blocked');
+  // minimal_video must NOT be granted unless every invariant holds.
+  assert.equal(g.videoGenerationAllowed({ ...vidEnv, MAX_SHOTS: '2' }), false);
+  assert.equal(g.videoGenerationAllowed({ ...vidEnv, ALLOW_FINAL_MERGE: 'true' }), false);
+});
+
+test('B8AJ0: interceptor — final-merge/export/rerun ALWAYS forbidden; video triggers forbidden only without authorization', () => {
+  const src = readUi();
+  assert.ok(/ALWAYS_FORBIDDEN_REQUEST = \[[\s\S]{0,300}final-merge/.test(src) &&
+    /ALWAYS_FORBIDDEN_REQUEST = \[[\s\S]{0,300}review-rerun-shot/.test(src) &&
+    /ALWAYS_FORBIDDEN_REQUEST = \[[\s\S]{0,300}export-project/.test(src),
+    'always-forbidden includes final-merge + rerun + export');
+  assert.ok(/VIDEO_TRIGGER_REQUEST = \[[\s\S]{0,200}review-submit[\s\S]{0,200}veo/.test(src), 'video triggers grouped separately');
+  assert.ok(/FORBIDDEN_REQUEST = VIDEO_AUTHORIZED[\s\S]{0,120}ALWAYS_FORBIDDEN_REQUEST[\s\S]{0,120}VIDEO_TRIGGER_REQUEST/.test(src),
+    'video triggers blocked only when not authorized; always-forbidden always blocked');
+});
+
+test('B8AJ0: smoke-report has all required minimal_video fields, defaulting safe (image_only)', () => {
+  const src = readUi();
+  for (const f of [
+    'smoke_scope', 'allow_video_generation', 'max_shots', 'video_generation_attempted', 'video_model_called',
+    'video_http_status', 'video_response_redacted_summary', 'video_clip_generated', 'video_clip_path',
+    'video_clip_file_exists', 'video_clip_duration', 'video_clip_size_bytes', 'video_save_path_allowed',
+    'final_merge_called', 'export_called', 'video_error_message', 'video_skipped_reason',
+  ]) {
+    assert.ok(src.includes(`${f}:`), `report must init ${f}`);
+  }
+  // defaults must be safe.
+  assert.ok(/final_merge_called: false/.test(src) && /export_called: false/.test(src), 'final_merge_called/export_called default false');
+  assert.ok(/video_generation_attempted: false/.test(src) && /video_clip_generated: false/.test(src), 'video defaults false');
+});
+
+test('B8AJ0: final_merge_called=false AND export_called=false are HARD pass gates; failures are classified', () => {
+  const src = readUi();
+  // pass only when one clip generated AND no final-merge AND no export.
+  assert.ok(/video_clip_generated === true && report\.video_clip_file_exists === true[\s\S]{0,120}final_merge_called === false && report\.export_called === false[\s\S]{0,120}status = 'passed'/.test(src),
+    'pass requires clip generated + file exists + no final-merge + no export');
+  // a final-merge / export attempt during minimal_video fails with the right stage.
+  assert.ok(/final_merge_unexpectedly_called/.test(src) && /export_unexpectedly_called/.test(src), 'K/L failure stages present');
+  for (const stage of ['storyboard_ready_restore_failed', 'review_panel_missing_before_video', 'video_button_or_ui_action_missing', 'video_api_not_called', 'video_api_failed', 'video_path_not_allowed', 'video_file_not_saved']) {
+    assert.ok(src.includes(stage), `failure classification ${stage} present`);
+  }
+});
+
+test('B8AJ0: minimal_video runs ONLY after storyboard + review panel are confirmed; never fakes a clip', () => {
+  const src = readUi();
+  assert.ok(/if \(VIDEO_AUTHORIZED\)[\s\S]{0,400}storyboardOk[\s\S]{0,400}review_panel_image_present !== true/.test(src),
+    'video gated on storyboardOk + review_panel_image_present');
+  // the clip is verified from a REAL file on disk (size>0) under the allowed videos root.
+  assert.ok(/video_clip_size_bytes \|\| 0\) > 0 && report\.video_save_path_allowed === true/.test(src), 'clip verified by real file size + allowed path');
+  assert.ok(/readMp4DurationSec/.test(src), 'duration read from the real mp4');
+  // must not write a fake clip / must not fabricate success.
+  assert.ok(!/writeFileSync\([^,]*videos[^,]*\.mp4/.test(src), 'smoke must not write a video file itself');
+});
+
+test('B8AJ0: the WF03 shot cap is file-gated + test-only (production never writes the marker)', () => {
+  const wf03 = fs.readFileSync(path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n03.json'), 'utf8');
+  assert.ok(wf03.includes('.smoke-max-shots'), 'WF03 reads the .smoke-max-shots marker');
+  assert.ok(/_smokeShotCap > 0 && _smokeShotCap < _panelsFiltered\.length[\s\S]{0,60}slice\(0, _smokeShotCap\)/.test(wf03),
+    'WF03 caps the shot list only when the marker is present');
+  // the smoke writes the marker (so the real UI generates exactly 1) but never a video file.
+  const src = readUi();
+  assert.ok(/writeFileSync\(path\.join\(capDir, '\.smoke-max-shots'\), String\(report\.max_shots/.test(src), 'smoke writes the 1-shot cap marker');
+});
+
+test('B8AJ0: video diagnostics are redacted (no key / no full response) + WF03 cap keeps WF03 syntax valid', () => {
+  const src = readUi();
+  const fn = src.slice(src.indexOf('function collectVideoDiagnostics'), src.indexOf('async function runMinimalVideo'));
+  assert.ok(/video_response_redacted_summary = redactString/.test(fn), 'response summary redacted');
+  assert.ok(/video_error_message = redactString/.test(fn), 'error redacted');
+  assert.ok(!/Authorization|api_key|bearer/i.test(fn) && !/base64/.test(fn), 'no Authorization/api_key/base64');
+  // WF03 cap node still parses as JSON + async-valid.
+  const wf03 = JSON.parse(fs.readFileSync(path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n03.json'), 'utf8'));
+  const node = wf03.nodes.find((n) => n.name === '恢复已确认分镜');
+  const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+  assert.doesNotThrow(() => new AsyncFn(node.parameters.jsCode), 'WF03 capped node syntax valid');
 });

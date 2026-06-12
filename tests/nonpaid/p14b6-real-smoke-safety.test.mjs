@@ -101,7 +101,7 @@ test('assertImageOnlyScope throws when env vars are absent', async () => {
   delete process.env.REAL_SMOKE_SCOPE;
   delete process.env.DISABLE_VIDEO_GENERATION;
   try {
-    assert.throws(() => assertImageOnlyScope(), /image-only scope violation/i);
+    assert.throws(() => assertImageOnlyScope(), /scope violation/i);
   } finally {
     if (prevScope !== undefined) process.env.REAL_SMOKE_SCOPE = prevScope;
     if (prevDis !== undefined) process.env.DISABLE_VIDEO_GENERATION = prevDis;
@@ -373,7 +373,9 @@ test('checkSmokeSecurityGate collects all errors when nothing is set', async () 
   const { checkSmokeSecurityGate } = await import(CHECK_SECURITY_URL);
   const { ok, errors } = checkSmokeSecurityGate({});
   assert.equal(ok, false);
-  assert.ok(errors.length >= 3, `expected at least 3 errors, got ${errors.length}: ${errors}`);
+  // Empty env → unknown scope error + missing API key (the gate collects multiple errors).
+  assert.ok(errors.length >= 2, `expected at least 2 errors, got ${errors.length}: ${errors}`);
+  assert.ok(errors.some((e) => /REAL_SMOKE_SCOPE/.test(e)) && errors.some((e) => /AI_VIDEO_API_KEY/.test(e)), 'reports scope + key errors');
 });
 
 // ── Batch syntax check (mirrors nonpaid style in p14-n8n-runtime.test.mjs) ───

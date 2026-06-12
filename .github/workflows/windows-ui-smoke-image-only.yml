@@ -26,14 +26,58 @@ on:
         options:
           - diagnostic
           - full
+      smoke_scope:
+        description: 'image_only (default, NO video) | minimal_video (real 1-shot video clip; final video merge & export still BLOCKED)'
+        required: false
+        default: 'image_only'
+        type: choice
+        options:
+          - image_only
+          - minimal_video
+      max_shots:
+        description: 'minimal_video must be exactly 1 (a value != 1 FAILS the security gate); ignored for image_only'
+        required: false
+        default: '1'
+      allow_video_generation:
+        description: 'minimal_video ONLY: must be true to actually generate the single clip (default false → no video)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      allow_final_merge:
+        description: 'MUST stay false — final merge is never allowed in any smoke (true FAILS the gate)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+      allow_export:
+        description: 'MUST stay false — export is never allowed in any smoke (true FAILS the gate)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 permissions:
   contents: read
   actions: read
 
+# Job-level env is inherited by every step (process.env). Defaults reproduce the EXACT
+# previous image_only behavior: REAL_SMOKE_SCOPE=image_only, DISABLE_VIDEO_GENERATION=true.
+# Video is enabled ONLY when smoke_scope=minimal_video AND allow_video_generation=true.
+# MAX_SHOTS is passed through (NOT silently forced) so the gate FAILS on max_shots != 1.
 env:
-  REAL_SMOKE_SCOPE: image_only
-  DISABLE_VIDEO_GENERATION: 'true'
+  REAL_SMOKE_SCOPE: ${{ inputs.smoke_scope || 'image_only' }}
+  ALLOW_VIDEO_GENERATION: ${{ inputs.allow_video_generation || 'false' }}
+  ALLOW_FINAL_MERGE: ${{ inputs.allow_final_merge || 'false' }}
+  ALLOW_EXPORT: ${{ inputs.allow_export || 'false' }}
+  MAX_SHOTS: ${{ inputs.max_shots || '1' }}
+  DISABLE_VIDEO_GENERATION: ${{ (inputs.smoke_scope == 'minimal_video' && inputs.allow_video_generation == 'true') && 'false' || 'true' }}
 
 jobs:
   ui-smoke-image-only:
