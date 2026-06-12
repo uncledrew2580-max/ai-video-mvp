@@ -158,11 +158,15 @@ test('assertImageOnlyScope passes when correctly set', async () => {
 
 // ── Guard module: forbidden operations throw ──────────────────────────────────
 
+// image_only env — the video guards block ONLY outside minimal_video, so assert with an
+// explicit image_only env (deterministic regardless of the ambient/job scope).
+const IMG_ONLY = { REAL_SMOKE_SCOPE: 'image_only', DISABLE_VIDEO_GENERATION: 'true' };
+
 test('guardVeo throws with BLOCKED message', async () => {
   const { guardVeo } = await import(SMOKE_GUARD_URL);
-  assert.throws(() => guardVeo(), /BLOCKED/);
-  assert.throws(() => guardVeo('Veo'), /BLOCKED.*Veo/);
-  assert.throws(() => guardVeo('reviewSubmitVeoV2'), /BLOCKED.*reviewSubmitVeoV2/);
+  assert.throws(() => guardVeo('Veo', IMG_ONLY), /BLOCKED/);
+  assert.throws(() => guardVeo('Veo', IMG_ONLY), /BLOCKED.*Veo/);
+  assert.throws(() => guardVeo('reviewSubmitVeoV2', IMG_ONLY), /BLOCKED.*reviewSubmitVeoV2/);
 });
 
 test('guardFinalMerge throws with BLOCKED final-merge message', async () => {
@@ -172,12 +176,12 @@ test('guardFinalMerge throws with BLOCKED final-merge message', async () => {
 
 test('guardVideoGeneration throws with BLOCKED video generation message', async () => {
   const { guardVideoGeneration } = await import(SMOKE_GUARD_URL);
-  assert.throws(() => guardVideoGeneration(), /BLOCKED.*video generation/);
+  assert.throws(() => guardVideoGeneration('video generation', IMG_ONLY), /BLOCKED.*video generation/);
 });
 
 test('guardReviewSubmit throws with BLOCKED /review-submit message', async () => {
   const { guardReviewSubmit } = await import(SMOKE_GUARD_URL);
-  assert.throws(() => guardReviewSubmit(), /BLOCKED.*\/review-submit/);
+  assert.throws(() => guardReviewSubmit('/review-submit', IMG_ONLY), /BLOCKED.*\/review-submit/);
 });
 
 test('guardReviewRerunShot throws with BLOCKED /review-rerun-shot message', async () => {
@@ -187,7 +191,7 @@ test('guardReviewRerunShot throws with BLOCKED /review-rerun-shot message', asyn
 
 test('guardReviewSubmitVeoV2 throws with BLOCKED reviewSubmitVeoV2 message', async () => {
   const { guardReviewSubmitVeoV2 } = await import(SMOKE_GUARD_URL);
-  assert.throws(() => guardReviewSubmitVeoV2(), /BLOCKED.*reviewSubmitVeoV2/);
+  assert.throws(() => guardReviewSubmitVeoV2(IMG_ONLY), /BLOCKED.*reviewSubmitVeoV2/);
 });
 
 // ── selfTest passes when scope env vars are correctly set ─────────────────────

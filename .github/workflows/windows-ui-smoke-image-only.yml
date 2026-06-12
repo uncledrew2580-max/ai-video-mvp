@@ -143,6 +143,16 @@ jobs:
       # going and only the last command's exit code would count).
       - name: Nonpaid safety + config/presence tests
         shell: pwsh
+        # These are OFFLINE safety tests — run them in the DEFAULT image_only scope, never
+        # the run's minimal_video scope, so ambient-env guard checks aren't contaminated by
+        # the job-level env (a minimal_video run must not flip default-scope assertions).
+        env:
+          REAL_SMOKE_SCOPE: image_only
+          DISABLE_VIDEO_GENERATION: 'true'
+          ALLOW_VIDEO_GENERATION: 'false'
+          ALLOW_FINAL_MERGE: 'false'
+          ALLOW_EXPORT: 'false'
+          MAX_SHOTS: '1'
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
