@@ -1610,3 +1610,77 @@ test('B8AJ0: video diagnostics are redacted (no key / no full response) + WF03 c
   const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
   assert.doesNotThrow(() => new AsyncFn(node.parameters.jsCode), 'WF03 capped node syntax valid');
 });
+
+// ── P14-B8AK: WF03 Kie first-frame upload — no large payload in curl argv (Windows) ──
+
+const WF03 = path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n03.json');
+const wf03VideoNode = () => {
+  const wf = JSON.parse(fs.readFileSync(WF03, 'utf8'));
+  return wf.nodes.find((n) => n.name === '逐镜视频_API_占位').parameters.jsCode;
+};
+
+test('B8AK: the spawned curl NEVER receives --data-raw in argv — large payload goes to a temp file', () => {
+  const c = wf03VideoNode();
+  // curl is spawned with the REWRITTEN args (_effArgs), not the raw args containing --data-raw.
+  assert.ok(/spawn\('curl',\[[^\]]*\.\.\._effArgs\]\)/.test(c), 'curl spawned with _effArgs (rewritten)');
+  assert.ok(!/spawn\('curl',\[[^\]]*\.\.\.args\]\)/.test(c), 'curl must NOT spawn with the raw args (which carry --data-raw)');
+  // the --data-raw value is spilled and replaced with --data-binary @tempfile.
+  assert.ok(/indexOf\('--data-raw'\)/.test(c), 'detects --data-raw');
+  assert.ok(/_effArgs\.splice\(_di,2,'--data-binary','@'\+_tf\)/.test(c), 'replaces --data-raw <payload> with --data-binary @tempfile');
+  assert.ok(/_fs\.writeFileSync\(_tf,_body\)/.test(c), 'writes the payload body to the temp file');
+});
+
+test('B8AK: temp payload file is app-controlled, randomly named, and cleaned up; no shell string concat', () => {
+  const c = wf03VideoNode();
+  assert.ok(/_os\.tmpdir\(\),'ai-video-curl'/.test(c), 'temp file under os.tmpdir()/ai-video-curl (app-controlled)');
+  assert.ok(/Math\.random\(\)\.toString\(36\)/.test(c), 'random temp file name (no secret in the name)');
+  assert.ok(/finally\{for\(const _f of _tmp\)\{try\{_fs\.unlinkSync\(_f\)/.test(c), 'temp files cleaned up in finally');
+  // must not build a huge shell string (no --data-raw "..." interpolation into a shell).
+  assert.ok(!/shell:\s*true/.test(c), 'curl spawn must not use shell:true');
+});
+
+test('B8AK: first-frame upload writes a REDACTED sidecar (size/method only — no body, no key)', () => {
+  const c = wf03VideoNode();
+  assert.ok(/\.firstframe-upload-diag\.json/.test(c), 'writes the first-frame diag sidecar');
+  assert.ok(/payload_size_bytes:Buffer\.byteLength\(_body,'utf8'\)/.test(c), 'records payload SIZE (not the body)');
+  assert.ok(/method:'curl-data-binary-tempfile'/.test(c), 'records the transport method');
+  // the sidecar object must not contain the body or any auth/key.
+  const side = c.slice(c.indexOf('.firstframe-upload-diag'), c.indexOf('.firstframe-upload-diag') + 260);
+  assert.ok(!/_body[^_]/.test(side.replace('Buffer.byteLength(_body', '')) && !/api_key|Authorization|Bearer/i.test(side), 'sidecar carries no body / no key');
+  // uses the B8AD platform-aware workflow-data path (runner-visible via HOME).
+  assert.ok(/platform==='win32'[\s\S]{0,160}AppData','Roaming'\),'AI Video','workflow-data'/.test(c), 'sidecar under %APPDATA% workflow-data on Windows');
+});
+
+test('B8AK: smoke exposes the first-frame upload diagnostics + ENAMETOOLONG classification', () => {
+  const src = readUi();
+  for (const f of ['first_frame_upload_attempted', 'first_frame_upload_method', 'first_frame_payload_size_bytes', 'first_frame_spawn_enametoolong', 'first_frame_upload_http_status', 'first_frame_upload_response_redacted_summary', 'first_frame_upload_succeeded', 'first_frame_uploaded_url_present']) {
+    assert.ok(src.includes(`${f}:`), `report must init ${f}`);
+  }
+  // spawn_enametoolong is derived from the execution + n8n.log (the proof the fix worked).
+  assert.ok(/first_frame_spawn_enametoolong = \/ENAMETOOLONG\/i\.test\(text\) \|\| \/ENAMETOOLONG\/i\.test\(logText\)/.test(src), 'enametoolong scanned from execution + log');
+  // method/size come from the redacted node sidecar.
+  assert.ok(/\.firstframe-upload-diag\.json/.test(src), 'smoke reads the redacted sidecar');
+  // failure stage distinguishes the first-frame ENAMETOOLONG from the Veo call.
+  assert.ok(/first_frame_upload_spawn_enametoolong/.test(src) && /first_frame_uploaded_url_missing/.test(src), 'first-frame failure classes present');
+});
+
+test('B8AK: smoke first-frame diagnostics stay redacted + safety gates unchanged', () => {
+  const src = readUi();
+  const fn = src.slice(src.indexOf('function collectVideoDiagnostics'), src.indexOf('async function runMinimalVideo'));
+  assert.ok(!/base64/.test(fn), 'no base64 in the diagnostics');
+  assert.ok(!/Authorization|bearer/i.test(fn), 'no Authorization header read');
+  assert.ok(/redactString/.test(fn), 'redacts what it summarizes');
+  // hard gates still present (final-merge / export / 1-shot / image_only default).
+  assert.ok(/final_merge_called === false && report\.export_called === false[\s\S]{0,80}status = 'passed'/.test(src), 'final-merge + export still hard gates');
+  assert.ok(/String\(env\.MAX_SHOTS\) === '1'/.test(fs.readFileSync(SMOKE_GUARD, 'utf8')), 'max_shots=1 still enforced by the guard');
+});
+
+test('B8AK: WF03 change is payload-transport ONLY — endpoint/auth/model/route untouched, syntax valid', () => {
+  const c = wf03VideoNode();
+  // the Kie endpoints + auth header + model route are unchanged (still referenced as before).
+  assert.ok(/Authorization: Bearer/.test(c), 'auth header path unchanged');
+  assert.ok(/vc\.uploadUrl/.test(c) && /Kie首帧图上传/.test(c), 'upload endpoint + label unchanged');
+  assert.ok(/kie_veo31|video_model/.test(c), 'video model route unchanged');
+  const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+  assert.doesNotThrow(() => new AsyncFn(c), 'WF03 video node syntax valid');
+});

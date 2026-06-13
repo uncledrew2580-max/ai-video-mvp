@@ -236,6 +236,15 @@ const report = {
   video_skipped_reason: VIDEO_AUTHORIZED ? null : 'scope_image_only',
   video_cap_file_written: null,
   video_submit_status: null,
+  // ── B8AK: Kie first-frame upload (the pre-Veo step that hit Windows ENAMETOOLONG) ──
+  first_frame_upload_attempted: null,
+  first_frame_upload_method: null,
+  first_frame_payload_size_bytes: null,
+  first_frame_spawn_enametoolong: null,
+  first_frame_upload_http_status: null,
+  first_frame_upload_response_redacted_summary: null,
+  first_frame_upload_succeeded: null,
+  first_frame_uploaded_url_present: null,
   api_key_leaked: false,
   forbidden_requests_blocked: [],
   stages: [],
@@ -942,6 +951,34 @@ function collectVideoDiagnostics(report) {
     // a redacted one-line response summary (no full response / no key)
     const sm = text.match(/"(?:operationName|name|taskId|videoUrl|status)"\s*:\s*"[^"]{0,40}"/);
     if (sm) report.video_response_redacted_summary = redactString(sm[0]).slice(0, 160);
+    // ── B8AK first-frame upload diagnostics ──
+    // 1) ENAMETOOLONG must be GONE (the whole point of the fix): scan the WF03 execution +
+    //    n8n.log. spawn_enametoolong=false proves the temp-file transport replaced --data-raw.
+    let logText = '';
+    try { const lp = path.join(userSupportDir(), 'logs', 'launcher', 'n8n.log'); if (fs.existsSync(lp)) logText = fs.readFileSync(lp, 'utf8'); } catch {}
+    report.first_frame_spawn_enametoolong = /ENAMETOOLONG/i.test(text) || /ENAMETOOLONG/i.test(logText);
+    // 2) method + payload size from the node's REDACTED sidecar (no body, no key).
+    try {
+      const sc = path.join(userSupportDir(), 'workflow-data', '.n8n-local-cache', '.firstframe-upload-diag.json');
+      if (fs.existsSync(sc)) {
+        const j = JSON.parse(fs.readFileSync(sc, 'utf8'));
+        report.first_frame_upload_attempted = Boolean(j.attempted);
+        report.first_frame_upload_method = j.method ? String(j.method).slice(0, 40) : null;
+        report.first_frame_payload_size_bytes = Number.isFinite(j.payload_size_bytes) ? j.payload_size_bytes : null;
+      }
+    } catch {}
+    // 3) upload outcome (attempted/http/url) derived from the WF03 execution (redacted).
+    if (report.first_frame_upload_attempted == null) report.first_frame_upload_attempted = /Kie首帧图上传|首帧/.test(text) || /Kie首帧图上传|首帧/.test(logText);
+    const um = text.match(/Kie首帧图上传[^]{0,80}?HTTP (\d{3})/);
+    if (um) report.first_frame_upload_http_status = Number(um[1]);
+    const urlPresent = /"(?:downloadUrl|download_url|fileUrl|file_url|url|publicUrl|public_url)"\s*:\s*"https?:\/\//.test(text);
+    report.first_frame_uploaded_url_present = urlPresent || null;
+    // succeeded = no enametoolong + a URL present (or the run progressed past upload to Veo).
+    const uploadFailed = /Kie首帧图上传 连续重试失败|spawn ENAMETOOLONG/i.test(text) || report.first_frame_spawn_enametoolong === true;
+    report.first_frame_upload_succeeded = uploadFailed ? false : (urlPresent || report.video_model_called === true ? true : null);
+    if (uploadFailed) {
+      const fm = text.match(/Kie首帧图上传[^]{0,120}/); if (fm) report.first_frame_upload_response_redacted_summary = redactString(fm[0]).slice(0, 160);
+    }
   } catch {}
 }
 
@@ -1846,9 +1883,13 @@ async function main() {
       console.log('[ui-smoke] PASS: one video clip generated (no final-merge, no export).');
       finalize(0, apiKey); return;
     }
-    // Classify the minimal_video failure (A–M).
+    // Classify the minimal_video failure. B8AK: the first-frame upload (pre-Veo) is
+    // distinguished from the Veo call itself so a regression is unambiguous.
     let stage = report.video_skipped_reason || 'video_file_not_saved';
     if (stage === 'review_panel_missing_before_video' || stage === 'video_button_or_ui_action_missing') { /* C / D */ }
+    else if (report.first_frame_spawn_enametoolong === true) stage = 'first_frame_upload_spawn_enametoolong'; // B8AK-A (the bug being fixed)
+    else if (report.first_frame_upload_succeeded === false && report.first_frame_upload_http_status && report.first_frame_upload_http_status >= 400) stage = 'first_frame_upload_http_failed'; // B8AK-B
+    else if (report.first_frame_upload_succeeded === false && report.first_frame_uploaded_url_present === false) stage = 'first_frame_uploaded_url_missing'; // B8AK-D
     else if (report.video_http_status && report.video_http_status >= 400) stage = 'video_api_failed'; // F
     else if (report.video_generation_attempted && report.video_model_called === false && report.video_clip_file_exists === false) stage = 'video_api_not_called'; // E
     else if (report.video_clip_file_exists === true && report.video_save_path_allowed === false) stage = 'video_path_not_allowed'; // I
