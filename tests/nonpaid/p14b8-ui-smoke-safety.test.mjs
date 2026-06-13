@@ -108,8 +108,9 @@ test('B8C: workflow defaults to diagnostic mode (no image generation) and passes
 
 test('B8C: the smoke step has a backstop timeout so it never hits the 90-min job timeout', () => {
   const yml = readWf();
-  assert.ok(/Run UI-driven image-only smoke[\s\S]{0,160}timeout-minutes:\s*\d+/.test(yml),
-    'the smoke step must set its own timeout-minutes');
+  // Scope-aware backstop: image_only 12, minimal_video 30 (both well above the script self-cap).
+  assert.ok(/Run UI-driven image-only smoke[\s\S]{0,200}timeout-minutes:\s*(\d+|\$\{\{[^}]+\}\})/.test(yml),
+    'the smoke step must set its own timeout-minutes (literal or scope-aware expression)');
 });
 
 test('B8C: nonpaid test step fails fast (pwsh does not swallow intermediate failures)', () => {
@@ -382,7 +383,7 @@ test('smoke-guard.mjs passes node --check (shared guard module)', () => {
 // ── P14-B8C: startup diagnostics, fast-fail timeouts, always-write report ─────
 import os from 'node:os';
 
-test('B8C: fast-fail budgets are bounded (launch<=60s, workbench<=90s, total<=10min)', () => {
+test('B8C: fast-fail budgets are bounded (launch<=60s, workbench<=90s, image_only total<=10min)', () => {
   const src = readUi();
   const num = (name) => {
     const m = src.match(new RegExp(`const ${name} = ([^;]+);`));
@@ -392,7 +393,11 @@ test('B8C: fast-fail budgets are bounded (launch<=60s, workbench<=90s, total<=10
   };
   assert.ok(num('APP_LAUNCH_MS') <= 60_000, 'app launch timeout must be <= 60s');
   assert.ok(num('WORKBENCH_MS') <= 90_000, 'workbench-ready timeout must be <= 90s');
-  assert.ok(num('TOTAL_MS') <= 10 * 60_000, 'overall hard cap must be <= 10min');
+  // TOTAL_MS is scope-aware: image_only <=10min (unchanged), minimal_video larger (<=20min)
+  // but still a HARD cap (never unbounded). Both branches must be present + bounded.
+  assert.ok(/TOTAL_MS = VIDEO_AUTHORIZED \? 20 \* 60_000 : 9 \* 60_000/.test(src),
+    'image_only 9min (<=10min) + minimal_video 20min hard caps');
+  assert.ok(/VIDEO_WAIT_MS = 11 \* 60_000/.test(src), 'video wait is bounded (no unbounded waiting)');
 });
 
 test('B8C: a hard overall watchdog forces a failure + exit', () => {
@@ -1683,4 +1688,63 @@ test('B8AK: WF03 change is payload-transport ONLY — endpoint/auth/model/route 
   assert.ok(/kie_veo31|video_model/.test(c), 'video model route unchanged');
   const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
   assert.doesNotThrow(() => new AsyncFn(c), 'WF03 video node syntax valid');
+});
+
+// ── P14-B8AM: minimal_video time budget + timeout-resilient diagnostics ───────
+
+test('B8AM: image_only TOTAL_MS unchanged (9min); minimal_video gets a longer cap (20min)', () => {
+  const src = readUi();
+  assert.ok(/TOTAL_MS = VIDEO_AUTHORIZED \? 20 \* 60_000 : 9 \* 60_000/.test(src),
+    'image_only=9min unchanged; minimal_video=20min');
+  assert.ok(/VIDEO_WAIT_MS = 11 \* 60_000/.test(src), 'bounded video wait (11min, well inside 20min)');
+  // the wait loop uses the bounded budget (no unbounded waiting).
+  assert.ok(/const deadline = Date\.now\(\) \+ VIDEO_WAIT_MS/.test(src), 'wait loop bounded by VIDEO_WAIT_MS');
+});
+
+test('B8AM: GitHub step timeout backstop > smoke TOTAL_MS, scope-aware (image_only 12 / minimal_video 30)', () => {
+  const yml = fs.readFileSync(WORKFLOW, 'utf8');
+  assert.ok(/timeout-minutes:\s*\$\{\{ inputs\.smoke_scope == 'minimal_video' && 30 \|\| 12 \}\}/.test(yml),
+    'step timeout: image_only 12, minimal_video 30');
+  // backstops (12/30 min) must exceed the script self-caps (9/20 min).
+  // image_only: 12 > 9 ✓ ; minimal_video: 30 > 20 ✓ (asserted by the literal pairing above).
+});
+
+test('B8AM: the overall watchdog collects video diagnostics on timeout (no all-null video fields)', () => {
+  const src = readUi();
+  // watchdog: when video was attempted, collect diagnostics + set flags BEFORE failing.
+  assert.ok(/setTimeout\(\(\) => \{[\s\S]{0,400}VIDEO_AUTHORIZED && report\.video_generation_attempted[\s\S]{0,200}collectVideoDiagnostics\(report\); report\.video_diagnostics_collected = true/.test(src),
+    'watchdog collects video diagnostics when a clip was being generated');
+  assert.ok(/report\.video_wait_timed_out = true/.test(src), 'sets video_wait_timed_out');
+  // watchdog classifies the timeout (still-processing vs not-called vs failed).
+  assert.ok(/video_api_called_but_still_processing/.test(src), 'distinguishes "called but still processing"');
+});
+
+test('B8AM: timeout-resilient diagnostic fields exist + latest_video_task_status is evidence-based', () => {
+  const src = readUi();
+  for (const f of ['video_wait_timed_out', 'video_diagnostics_collected', 'latest_video_task_status']) {
+    assert.ok(src.includes(`${f}:`), `report must init ${f}`);
+  }
+  const fn = src.slice(src.indexOf('function collectVideoDiagnostics'), src.indexOf('async function runMinimalVideo'));
+  // task status / model-called derived from real task evidence (taskId/operationName/status), not guessed.
+  assert.ok(/latest_video_task_status = String\(ts\[1\]\)/.test(fn), 'task status from a real status field');
+  assert.ok(/taskId|operationName|veo_task_id|modelhub_task_id/.test(fn), 'model_called inferred from a real submitted task id');
+  assert.ok(!/Authorization|api_key|bearer/i.test(fn) && !/base64/.test(fn), 'diagnostics stay redacted');
+});
+
+test('B8AM: runMinimalVideo always collects diagnostics + flags a still-processing clip', () => {
+  const src = readUi();
+  assert.ok(/if \(!newClip && Date\.now\(\) >= deadline\) report\.video_wait_timed_out = true/.test(src), 'flags wait timeout');
+  assert.ok(/collectVideoDiagnostics\(report\); report\.video_diagnostics_collected = true/.test(src), 'always collects diagnostics after the wait');
+  assert.ok(/video_api_called_but_still_processing[\s\S]{0,40}'video_file_not_saved'/.test(src), 'distinguishes still-processing from no-file');
+});
+
+test('B8AM: safety gates unchanged — max_shots=1, final_merge=false, export=false, image_only default', () => {
+  const src = readUi();
+  const guard = fs.readFileSync(SMOKE_GUARD, 'utf8');
+  assert.ok(/String\(env\.MAX_SHOTS\) === '1'/.test(guard), 'max_shots=1 still enforced');
+  assert.ok(/final_merge_called === false && report\.export_called === false[\s\S]{0,80}status = 'passed'/.test(src), 'final-merge + export still hard gates');
+  // image_only default budget path is preserved (the 9min branch).
+  assert.ok(/: 9 \* 60_000/.test(src), 'image_only 9min budget preserved');
+  // the gate/guard still reject final-merge/export=true (regression guard).
+  assert.ok(/minimal_video forbids ALLOW_FINAL_MERGE/.test(fs.readFileSync(path.join(ROOT,'scripts','win','check-smoke-security.mjs'),'utf8')), 'gate still rejects final-merge');
 });

@@ -241,10 +241,12 @@ jobs:
 
       # The UI-driven smoke: drives AI Video.exe through Playwright. Default mode
       # is 'diagnostic' (startup + diagnostics ONLY, no image generation). The
-      # script self-caps at <=9min and force-cleans child processes; the step
-      # timeout is a backstop so a hang never reaches the 90-min job timeout.
+      # script self-caps (image_only <=9min, minimal_video <=20min) and force-cleans
+      # child processes; the step timeout is a BACKSTOP (kept above the script cap) so a
+      # hang never reaches the 90-min job timeout. minimal_video needs the full image
+      # pipeline PLUS a real Veo video generation, so its backstop is larger.
       - name: Run UI-driven image-only smoke
-        timeout-minutes: 12
+        timeout-minutes: ${{ inputs.smoke_scope == 'minimal_video' && 30 || 12 }}
         shell: pwsh
         env:
           REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}

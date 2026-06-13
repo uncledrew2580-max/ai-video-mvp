@@ -72,7 +72,12 @@ const FULL = MODE === 'full';
 // ── Fast-fail budgets (B8C) ───────────────────────────────────────────────────
 const APP_LAUNCH_MS = 60_000;   // <=60s to spawn the Electron app
 const WORKBENCH_MS = 90_000;    // <=90s for the workbench to load (else fast fail)
-const TOTAL_MS = 9 * 60_000;    // <=9min hard cap for the whole smoke
+// image_only hard cap is unchanged (<=9min). minimal_video needs the full image pipeline
+// (~7-8min) PLUS a real Veo video generation (~several min), so it gets a longer cap.
+const TOTAL_MS = VIDEO_AUTHORIZED ? 20 * 60_000 : 9 * 60_000;
+// How long to wait for the single video clip to land — bounded, and well inside TOTAL_MS so
+// the verdict (which collects video diagnostics) always runs before the overall watchdog.
+const VIDEO_WAIT_MS = 11 * 60_000;
 
 const UI_PORT = Number(process.env.AI_VIDEO_UI_PORT || 18788);
 const N8N_PORT = Number(process.env.AI_VIDEO_N8N_PORT || 5678);
@@ -236,6 +241,10 @@ const report = {
   video_skipped_reason: VIDEO_AUTHORIZED ? null : 'scope_image_only',
   video_cap_file_written: null,
   video_submit_status: null,
+  // ── B8AM: timeout-resilient video diagnostics ──
+  video_wait_timed_out: false,
+  video_diagnostics_collected: false,
+  latest_video_task_status: null,
   // ── B8AK: Kie first-frame upload (the pre-Veo step that hit Windows ENAMETOOLONG) ──
   first_frame_upload_attempted: null,
   first_frame_upload_method: null,
@@ -951,6 +960,12 @@ function collectVideoDiagnostics(report) {
     // a redacted one-line response summary (no full response / no key)
     const sm = text.match(/"(?:operationName|name|taskId|videoUrl|status)"\s*:\s*"[^"]{0,40}"/);
     if (sm) report.video_response_redacted_summary = redactString(sm[0]).slice(0, 160);
+    // B8AM: latest Veo task status (processing / completed / failed / submitted) — evidence
+    // that the model WAS called even when the clip hasn't landed yet. A submitted task id /
+    // operationName implies the Veo HTTP call happened.
+    const ts = text.match(/"(?:successFlag|veo_done|status|state)"\s*:\s*"?(processing|pending|running|queued|completed|done|success|succeeded|failed|error)"?/i);
+    if (ts) report.latest_video_task_status = String(ts[1]).toLowerCase();
+    if (/"(?:taskId|operationName|veo_task_id|modelhub_task_id)"\s*:\s*"[^"]{4,}"/.test(text)) { report.video_model_called = true; if (!report.latest_video_task_status) report.latest_video_task_status = report.latest_video_task_status || 'submitted'; }
     // ── B8AK first-frame upload diagnostics ──
     // 1) ENAMETOOLONG must be GONE (the whole point of the fix): scan the WF03 execution +
     //    n8n.log. spawn_enametoolong=false proves the temp-file transport replaced --data-raw.
@@ -1009,8 +1024,10 @@ async function runMinimalVideo(report, page, uiBase, apiKey) {
   report.stages.push('video_generation_attempted');
   const sResp = await submitResp.catch(() => null);
   report.video_submit_status = sResp ? sResp.status() : null;
-  // 4) wait for the SINGLE new clip (Veo is slow; cap=1 keeps it to one generation).
-  const deadline = Date.now() + 6 * 60 * 1000;
+  // 4) wait for the SINGLE new clip (Veo is slow; cap=1 keeps it to one generation). The
+  // wait is bounded by VIDEO_WAIT_MS and ends well before the overall watchdog, so the
+  // diagnostics below ALWAYS run (the report never ends with all-null video fields).
+  const deadline = Date.now() + VIDEO_WAIT_MS;
   let newClip = null;
   while (Date.now() < deadline) {
     if (report.forbidden_requests_blocked.length > 0) break;
@@ -1022,9 +1039,15 @@ async function runMinimalVideo(report, page, uiBase, apiKey) {
     } catch {}
     await sleep(8000);
   }
-  // 5) redacted WF03 execution diagnostics (model called / http / error).
-  try { collectVideoDiagnostics(report); } catch {}
-  if (!newClip) { report.video_skipped_reason = report.video_skipped_reason || 'video_file_not_saved'; return; }
+  if (!newClip && Date.now() >= deadline) report.video_wait_timed_out = true;
+  // 5) redacted WF03 execution diagnostics (model called / http / error / task status).
+  try { collectVideoDiagnostics(report); report.video_diagnostics_collected = true; } catch {}
+  if (!newClip) {
+    // Distinguish "Veo accepted, still processing" from "never called" / "no file".
+    report.video_skipped_reason = report.video_skipped_reason
+      || (report.video_wait_timed_out && (report.video_model_called === true || report.latest_video_task_status) ? 'video_api_called_but_still_processing' : 'video_file_not_saved');
+    return;
+  }
   // 6) verify the single clip.
   report.video_clip_path = newClip;
   report.video_clip_file_exists = true;
@@ -1270,8 +1293,22 @@ async function main() {
   else console.log('[ui-smoke] AI_VIDEO_API_KEY not provided');
   if (FULL && !apiKey) { fail('api_key_missing', new Error('AI_VIDEO_API_KEY is required for full mode'), apiKey); return; }
 
-  // Hard overall watchdog — never hang to the GitHub job timeout.
+  // Hard overall watchdog — never hang to the GitHub job timeout. B8AM: if a video clip
+  // was being generated when the cap hit, collect the video diagnostics FIRST (so the
+  // report never ends with all-null video fields) and classify the timeout precisely.
   const watchdog = setTimeout(() => {
+    if (VIDEO_AUTHORIZED && report.video_generation_attempted) {
+      report.video_wait_timed_out = true;
+      try { collectVideoDiagnostics(report); report.video_diagnostics_collected = true; } catch {}
+      let stage = 'overall_timeout';
+      if (report.first_frame_spawn_enametoolong === true) stage = 'first_frame_upload_spawn_enametoolong';
+      else if (report.video_http_status && report.video_http_status >= 400) stage = 'video_api_failed';
+      else if (report.video_model_called === true || report.latest_video_task_status) stage = 'video_api_called_but_still_processing';
+      else if (report.video_generation_attempted) stage = 'video_api_not_called';
+      report.error_message = report.error_message || `UI smoke exceeded hard cap ${TOTAL_MS}ms (video ${report.latest_video_task_status || 'state unknown'})`;
+      fail(stage, new Error(report.error_message), apiKey);
+      return;
+    }
     report.error_message = report.error_message || `UI smoke exceeded hard cap ${TOTAL_MS}ms`;
     fail('overall_timeout', new Error(report.error_message), apiKey);
   }, TOTAL_MS);
@@ -1884,9 +1921,10 @@ async function main() {
       finalize(0, apiKey); return;
     }
     // Classify the minimal_video failure. B8AK: the first-frame upload (pre-Veo) is
-    // distinguished from the Veo call itself so a regression is unambiguous.
+    // distinguished from the Veo call. B8AM: a clip still generating at the wait deadline
+    // is "called but still processing", NOT "not called" / "no file".
     let stage = report.video_skipped_reason || 'video_file_not_saved';
-    if (stage === 'review_panel_missing_before_video' || stage === 'video_button_or_ui_action_missing') { /* C / D */ }
+    if (['review_panel_missing_before_video', 'video_button_or_ui_action_missing', 'video_api_called_but_still_processing'].includes(stage)) { /* keep — already classified */ }
     else if (report.first_frame_spawn_enametoolong === true) stage = 'first_frame_upload_spawn_enametoolong'; // B8AK-A (the bug being fixed)
     else if (report.first_frame_upload_succeeded === false && report.first_frame_upload_http_status && report.first_frame_upload_http_status >= 400) stage = 'first_frame_upload_http_failed'; // B8AK-B
     else if (report.first_frame_upload_succeeded === false && report.first_frame_uploaded_url_present === false) stage = 'first_frame_uploaded_url_missing'; // B8AK-D
