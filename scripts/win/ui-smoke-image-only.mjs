@@ -245,6 +245,11 @@ const report = {
   video_wait_timed_out: false,
   video_diagnostics_collected: false,
   latest_video_task_status: null,
+  // ── B8AO: WF03 Veo status-poll config-path visibility (the "缺少 Kie API Key" node) ──
+  veo_status_poll_missing_key: null,
+  veo_status_poll_config_path_used: null,
+  veo_status_poll_config_file_exists: null,
+  veo_status_poll_config_key_present: null,
   // ── B8AK: Kie first-frame upload (the pre-Veo step that hit Windows ENAMETOOLONG) ──
   first_frame_upload_attempted: null,
   first_frame_upload_method: null,
@@ -994,6 +999,15 @@ function collectVideoDiagnostics(report) {
     if (uploadFailed) {
       const fm = text.match(/Kie首帧图上传[^]{0,120}/); if (fm) report.first_frame_upload_response_redacted_summary = redactString(fm[0]).slice(0, 160);
     }
+    // ── B8AO: the Veo status-poll node must read the SAME unified Kie key. "缺少 Kie API
+    // Key" here = the poll node's config-path couldn't see the key (the bug being fixed).
+    report.veo_status_poll_missing_key = /缺少 Kie API Key/.test(report.video_error_message || '') || /缺少 Kie API Key/.test(text);
+    try {
+      const cs = configSummary();
+      report.veo_status_poll_config_path_used = cs.config_path || null;
+      report.veo_status_poll_config_file_exists = Boolean(cs.exists);
+      report.veo_status_poll_config_key_present = Boolean(cs.key_present);
+    } catch {}
   } catch {}
 }
 

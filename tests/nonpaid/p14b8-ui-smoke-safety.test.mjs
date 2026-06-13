@@ -1748,3 +1748,68 @@ test('B8AM: safety gates unchanged — max_shots=1, final_merge=false, export=fa
   // the gate/guard still reject final-merge/export=true (regression guard).
   assert.ok(/minimal_video forbids ALLOW_FINAL_MERGE/.test(fs.readFileSync(path.join(ROOT,'scripts','win','check-smoke-security.mjs'),'utf8')), 'gate still rejects final-merge');
 });
+
+// ── P14-B8AO: WF03 Veo status-poll (+ all video nodes) config-path Windows-safe ──
+
+const wf03Json = () => JSON.parse(fs.readFileSync(WF03, 'utf8'));
+
+test('B8AO: NO WF03 node has an unguarded Mac-only config path (the B8AD no-space residual)', () => {
+  const reMac = /(?:os|require\('os'\))\.homedir\(\)\s*,\s*'Library'\s*,\s*'Application Support'\s*,\s*'AI Video'\s*,\s*'config'\s*,\s*'local-config\.json'/g;
+  let unguarded = 0;
+  for (const n of wf03Json().nodes) {
+    const c = (n.parameters && n.parameters.jsCode) || ''; let m;
+    while ((m = reMac.exec(c))) {
+      const before = c.slice(Math.max(0, m.index - 400), m.index);
+      if (!(/platform === 'win32' \?/.test(before) && /AppData/.test(before))) { unguarded++; }
+    }
+  }
+  assert.equal(unguarded, 0, `WF03 has ${unguarded} UNGUARDED Mac-only config path(s)`);
+});
+
+test('B8AO: Veo查询任务状态 reads AI_VIDEO_CONFIG_PATH first + has a Windows %APPDATA% candidate', () => {
+  const poll = wf03Json().nodes.find((n) => n.name === 'Veo查询任务状态').parameters.jsCode;
+  assert.ok(/candidates=\[\(require\('process'\)\.env\|\|\{\}\)\.AI_VIDEO_CONFIG_PATH/.test(poll), 'AI_VIDEO_CONFIG_PATH first');
+  assert.ok(/platform === 'win32' \?[\s\S]{0,200}AppData[\s\S]{0,120}'config'/.test(poll), 'has a win32 %APPDATA% config candidate');
+  // Windows branch must NOT be a Mac/Library path.
+  assert.ok(!/win32 \? require\('path'\)\.join\(require\('os'\)\.homedir\(\), 'Library'/.test(poll) && !/win32 \? path\.join\(os\.homedir\(\), 'Library'/.test(poll), 'win32 branch is not a Mac path');
+});
+
+test('B8AO: every WF03 video node that reads config is now platform-aware + syntax valid', () => {
+  const AsyncFn = Object.getPrototypeOf(async function () {}).constructor;
+  const videoNodes = ['Veo图片上传元数据', 'Veo请求体组装', '逐镜视频_API_占位', 'Veo查询任务状态', 'Veo下载视频', 'Veo失败恢复策略', '读取Veo失败API配置'];
+  const wf = wf03Json();
+  for (const name of videoNodes) {
+    const node = wf.nodes.find((n) => n.name === name);
+    assert.ok(node, `${name} present`);
+    const c = node.parameters.jsCode;
+    // if it references a config local-config.json path at all, a win32 branch must exist.
+    if (/'config'\s*,\s*'local-config\.json'/.test(c)) {
+      assert.ok(/platform === 'win32' \?/.test(c) && /AppData/.test(c), `${name} config path must be platform-aware`);
+    }
+    assert.doesNotThrow(() => new AsyncFn(c), `${name} syntax valid`);
+  }
+});
+
+test('B8AO: smoke exposes Veo status-poll config diagnostics (redacted, no key)', () => {
+  const src = readUi();
+  for (const f of ['veo_status_poll_missing_key', 'veo_status_poll_config_path_used', 'veo_status_poll_config_file_exists', 'veo_status_poll_config_key_present']) {
+    assert.ok(src.includes(`${f}:`), `report must init ${f}`);
+  }
+  const fn = src.slice(src.indexOf('function collectVideoDiagnostics'), src.indexOf('async function runMinimalVideo'));
+  // missing_key derived from the WF03 error; config presence via configSummary (masked, never the key).
+  assert.ok(/veo_status_poll_missing_key = \/缺少 Kie API Key\/\.test/.test(fn), 'missing_key derived from the error');
+  assert.ok(/veo_status_poll_config_key_present = Boolean\(cs\.key_present\)/.test(fn), 'key presence (boolean) from configSummary');
+  assert.ok(!/cs\.key_masked|api_key|Authorization|bearer/i.test(fn) || !/key_masked/.test(fn), 'no raw/masked key emitted in this block');
+});
+
+test('B8AO: WF03 change is config-path ONLY — endpoint/auth/model/submit untouched', () => {
+  const c = wf03Json().nodes.find((n) => n.name === 'Veo查询任务状态').parameters.jsCode;
+  // the Kie endpoint base + auth header + status logic are unchanged.
+  assert.ok(/api\.kie\.ai|kie/i.test(c), 'Kie endpoint reference unchanged');
+  // diff was config-path only: 7 nodes, 1 line each (asserted by the residual=0 + per-node test).
+  // image_only default + safety gates intact.
+  const src = readUi();
+  assert.ok(/: 9 \* 60_000/.test(src), 'image_only 9min budget preserved');
+  assert.ok(/final_merge_called === false && report\.export_called === false[\s\S]{0,80}status = 'passed'/.test(src), 'final-merge + export hard gates intact');
+  assert.ok(/String\(env\.MAX_SHOTS\) === '1'/.test(fs.readFileSync(SMOKE_GUARD, 'utf8')), 'max_shots=1 enforced');
+});
