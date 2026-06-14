@@ -29,11 +29,11 @@ test('C1A0: workflow adds a license_gate scope that ENFORCES the gate (no bypass
 
 test('C1A0: image/video smokes keep their bypass + license_gate maps to the image_only safety scope', () => {
   const yml = readSrc(WORKFLOW);
-  // image/video step still bypasses (B8AI/B8AP unaffected) and is skipped for license_gate.
-  assert.ok(/if: \$\{\{ inputs\.smoke_scope != 'license_gate' \}\}[\s\S]{0,900}AI_VIDEO_LICENSE_BYPASS: '1'[\s\S]{0,120}ui-smoke-image-only\.mjs/.test(yml),
-    'image/video step bypasses + is skipped for license_gate');
+  // image/video step still bypasses (B8AI/B8AP unaffected) and is skipped for the gate scopes.
+  assert.ok(/if: \$\{\{ inputs\.smoke_scope != 'license_gate'[\s\S]{0,80}\}\}[\s\S]{0,900}AI_VIDEO_LICENSE_BYPASS: '1'[\s\S]{0,120}ui-smoke-image-only\.mjs/.test(yml),
+    'image/video step bypasses + is skipped for the gate scopes');
   // license_gate runs under image_only REAL_SMOKE_SCOPE so the security gate + guard pass.
-  assert.ok(/REAL_SMOKE_SCOPE: \$\{\{ inputs\.smoke_scope == 'license_gate' && 'image_only'/.test(yml), 'license_gate → image_only scope');
+  assert.ok(/REAL_SMOKE_SCOPE: \$\{\{[\s\S]{0,120}inputs\.smoke_scope == 'license_gate'[\s\S]{0,80}'image_only'/.test(yml), 'license_gate → image_only scope');
 });
 
 test('C1A0: the gate-smoke script enforces the gate in-process (required on, bypass deleted, test pub key)', () => {
