@@ -5820,7 +5820,9 @@ function verifySignedLicenseCode(licenseCode, expectedDeviceId) {
     throw new Error('激活码内容无法解析');
   }
   const cfg = normalizeAiConfig(loadConfig());
-  const publicKey = String(cfg.license?.public_key || LICENSE_PUBLIC_KEY).trim();
+  // P14-C1: AI_VIDEO_LICENSE_PUBLIC_KEY lets CI verify against a test keypair without the
+  // real signing-authority key. Production never sets it → the embedded public key is used.
+  const publicKey = String(process.env.AI_VIDEO_LICENSE_PUBLIC_KEY || cfg.license?.public_key || LICENSE_PUBLIC_KEY).trim();
   const ok = crypto.verify(
     null,
     Buffer.from(parts[1]),
@@ -5848,7 +5850,11 @@ function verifySignedLicenseCode(licenseCode, expectedDeviceId) {
 
 function getLicenseStatus() {
   const cfg = normalizeAiConfig(loadConfig());
-  const required = Boolean(cfg.license?.required);
+  // P14-C1: the packaged build forces the gate ON via AI_VIDEO_LICENSE_REQUIRED=1 (set by
+  // the launcher in dist mode); dev/config can also opt in. AI_VIDEO_LICENSE_BYPASS=1 (dev /
+  // image-video smoke) skips it. The gate at the request handler blocks every protected
+  // route when ok===false, so this single source of truth governs the whole workbench.
+  const required = process.env.AI_VIDEO_LICENSE_REQUIRED === '1' || Boolean(cfg.license?.required);
   const deviceId = getDeviceId();
   if (process.env.AI_VIDEO_LICENSE_BYPASS === '1') {
     return { required, ok: true, bypass: true, deviceId, message: '开发模式已跳过激活' };

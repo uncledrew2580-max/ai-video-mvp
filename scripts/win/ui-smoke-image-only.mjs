@@ -221,6 +221,15 @@ const report = {
   veo_not_called: true,
   final_merge_not_called: true,
   stopped_at: FULL ? 'storyboard_ready_for_review' : 'diagnostic_no_generation',
+  // ── P14-C1: license-gate diagnostics (redacted — no activation code / key / device raw) ──
+  license_required: null,
+  license_present: null,
+  license_valid: null,
+  license_error_code: null,
+  machine_id_hash_prefix: null,
+  license_plan: null,
+  license_expires_at: null,
+  license_bypass: process.env.AI_VIDEO_LICENSE_BYPASS === '1',
   // ── B8AJ0: minimal_video scope (default image_only → all below stay safe/false) ──
   smoke_scope: smokeScope(),
   allow_video_generation: process.env.ALLOW_VIDEO_GENERATION === 'true',
@@ -925,6 +934,28 @@ async function collectReviewRenderDiagnostics(report, page, uiBase) {
   report.review_render_diagnostics = D;
 }
 
+// P14-C1: read the license-gate state from the UI server (/license/status) + the license
+// file presence. REDACTED — emits only required/valid/error/plan/expiry + a machine-id-hash
+// PREFIX; never the activation code, the raw device id, the private key, or the API key.
+async function collectLicenseDiagnostics(report) {
+  try {
+    const st = await httpGetJson(`http://127.0.0.1:${UI_PORT}/license/status`);
+    if (st && typeof st === 'object') {
+      report.license_required = Boolean(st.required);
+      report.license_valid = Boolean(st.ok);
+      report.license_error_code = st.ok ? null : redactString(String(st.message || '')).slice(0, 80);
+      report.machine_id_hash_prefix = st.device_id ? String(st.device_id).slice(0, 8) : null;
+      report.license_plan = st.plan ? String(st.plan).slice(0, 24) : (st.customer ? 'customer' : null);
+      report.license_expires_at = st.expires_at ? String(st.expires_at).slice(0, 32) : null;
+    }
+  } catch {}
+  // license file presence (boolean only — never read/emit its contents).
+  try {
+    const lf = path.join(userSupportDir(), 'license.json');
+    report.license_present = fs.existsSync(lf);
+  } catch { report.license_present = false; }
+}
+
 // ── B8AJ0: minimal_video (EXACTLY one video clip via the real UI) ──────────────
 function videoCacheDir() { return path.join(userSupportDir(), 'workflow-data', '.n8n-local-cache', 'videos'); }
 
@@ -1380,6 +1411,9 @@ async function main() {
   // Always probe health + capture window diagnostics (whether or not it loaded).
   report.runtime_healthz = await httpProbe(`http://127.0.0.1:${UI_PORT}/`);
   report.n8n_healthz = await httpProbe(`http://127.0.0.1:${N8N_PORT}/healthz`);
+  // P14-C1: capture the license-gate state once the UI server is up (redacted — never the
+  // activation code, never the raw device id, never the API key).
+  try { await collectLicenseDiagnostics(report); } catch {}
   // Race the window-diagnostics capture too — w.title()/w.evaluate() on an
   // unresponsive window can hang, and must not run to the overall watchdog.
   const mainWin = await Promise.race([

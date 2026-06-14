@@ -157,6 +157,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           node --test tests/nonpaid/p14b8-ui-smoke-safety.test.mjs
+          node --test tests/nonpaid/p14c1-license-gate.test.mjs
           node --test tests/nonpaid/p14b6-real-smoke-safety.test.mjs
           node --test tests/nonpaid/p14b7-windows-config-sqlite.test.mjs
           node --test tests/nonpaid/p14-windows-config-init.test.mjs
@@ -254,6 +255,11 @@ jobs:
           UI_SMOKE_MODE: ${{ inputs.mode }}
           AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
           AI_VIDEO_BASE_URL: ${{ secrets.AI_VIDEO_BASE_URL }}
+          # P14-C1: the packaged build now enforces the license gate. The image/video smokes
+          # validate generation, NOT licensing, so they bypass the gate (the dedicated C1A
+          # gate smoke runs WITHOUT this to exercise activation). image_only default + the
+          # minimal_video safety gates are unaffected.
+          AI_VIDEO_LICENSE_BYPASS: '1'
         run: node scripts/win/ui-smoke-image-only.mjs "$env:AI_VIDEO_STAGE_DIR"
 
       - name: Upload UI smoke report + screenshots + diagnostics

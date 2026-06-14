@@ -674,6 +674,10 @@ async function main() {
         N8N_PORT: String(N8N_PORT),
         N8N_HOST: N8N_URL,
         N8N_DB_PATH: n8nDbPathForUi,
+        // P14-C1: the packaged build enforces the license gate (real users must activate);
+        // dev does not. AI_VIDEO_LICENSE_BYPASS / _PUBLIC_KEY pass through via ...process.env
+        // (dev + image/video smoke set BYPASS=1; CI gate smoke sets a test public key).
+        AI_VIDEO_LICENSE_REQUIRED: process.env.AI_VIDEO_LICENSE_REQUIRED || (_IS_DIST ? '1' : ''),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
