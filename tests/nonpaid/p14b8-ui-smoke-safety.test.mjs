@@ -43,10 +43,10 @@ test('workflow triggers ONLY on workflow_dispatch (no push/pull_request/schedule
 test('workflow env defaults to image-only scope (video disabled unless explicitly authorized)', () => {
   const yml = readWf();
   // REAL_SMOKE_SCOPE defaults to image_only; video is disabled unless minimal_video + allow.
-  assert.ok(/REAL_SMOKE_SCOPE:\s*\$\{\{ inputs\.smoke_scope \|\| 'image_only' \}\}/.test(yml), 'REAL_SMOKE_SCOPE defaults image_only');
+  assert.ok(/REAL_SMOKE_SCOPE:\s*\$\{\{[\s\S]{0,90}inputs\.smoke_scope \|\| 'image_only'/.test(yml), 'REAL_SMOKE_SCOPE defaults image_only');
   assert.ok(/DISABLE_VIDEO_GENERATION:\s*\$\{\{ \(inputs\.smoke_scope == 'minimal_video' && inputs\.allow_video_generation == 'true'\) && 'false' \|\| 'true' \}\}/.test(yml),
     'video disabled by default; only minimal_video + allow_video_generation enables it');
-  assert.ok(/smoke_scope:[\s\S]{0,180}default: 'image_only'/.test(yml), 'smoke_scope input defaults image_only');
+  assert.ok(/smoke_scope:[\s\S]{0,300}default: 'image_only'/.test(yml), 'smoke_scope input defaults image_only');
 });
 
 test('workflow reads API key ONLY from GitHub Secrets (no hardcoded value)', () => {
@@ -844,7 +844,7 @@ test('B8R1: a no-report run is summarized as "UI smoke not started" (not mislead
 
 test('B8R1: image-only default + dispatch-only trigger are preserved', () => {
   const yml = readWf();
-  assert.ok(/REAL_SMOKE_SCOPE:\s*\$\{\{ inputs\.smoke_scope \|\| 'image_only' \}\}/.test(yml), 'image-only default preserved');
+  assert.ok(/REAL_SMOKE_SCOPE:\s*\$\{\{[\s\S]{0,90}inputs\.smoke_scope \|\| 'image_only'/.test(yml), 'image-only default preserved');
   assert.ok(/DISABLE_VIDEO_GENERATION:[\s\S]{0,120}&& 'false' \|\| 'true' \}\}/.test(yml), 'video disabled unless explicitly authorized');
   assert.ok(/workflow_dispatch/.test(yml) && !/\n\s*push:/.test(yml) && !/\n\s*schedule:/.test(yml), 'still dispatch-only');
   // The UI smoke runner + the secret-only key path are unchanged.
@@ -1498,7 +1498,7 @@ async function guard() { return import(pathToFileURL(SMOKE_GUARD).href); }
 
 test('B8AJ0: workflow default dispatch is still image_only (no video) + has the 5 new inputs', () => {
   const yml = fs.readFileSync(WORKFLOW, 'utf8');
-  assert.ok(/smoke_scope:[\s\S]{0,200}default: 'image_only'/.test(yml), 'smoke_scope defaults image_only');
+  assert.ok(/smoke_scope:[\s\S]{0,300}default: 'image_only'/.test(yml), 'smoke_scope defaults image_only');
   for (const inp of ['smoke_scope', 'max_shots', 'allow_video_generation', 'allow_final_merge', 'allow_export']) {
     assert.ok(yml.includes(`${inp}:`), `workflow must define input ${inp}`);
   }

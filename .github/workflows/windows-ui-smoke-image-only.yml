@@ -27,13 +27,14 @@ on:
           - diagnostic
           - full
       smoke_scope:
-        description: 'image_only (default, NO video) | minimal_video (real 1-shot video clip; final video merge & export still BLOCKED)'
+        description: 'image_only (default, NO video) | minimal_video (real 1-shot video clip) | license_gate (P14-C1A: enforce the license gate, NO generation, CI test keypair)'
         required: false
         default: 'image_only'
         type: choice
         options:
           - image_only
           - minimal_video
+          - license_gate
       max_shots:
         description: 'minimal_video must be exactly 1 (a value != 1 FAILS the security gate); ignored for image_only'
         required: false
@@ -72,7 +73,10 @@ permissions:
 # Video is enabled ONLY when smoke_scope=minimal_video AND allow_video_generation=true.
 # MAX_SHOTS is passed through (NOT silently forced) so the gate FAILS on max_shots != 1.
 env:
-  REAL_SMOKE_SCOPE: ${{ inputs.smoke_scope || 'image_only' }}
+  # license_gate makes NO generation calls, so it runs under the image_only safety scope
+  # (the security gate + guard pass) while the license-gate script enforces AI_VIDEO_LICENSE_
+  # REQUIRED=1 with NO bypass.
+  REAL_SMOKE_SCOPE: ${{ inputs.smoke_scope == 'license_gate' && 'image_only' || (inputs.smoke_scope || 'image_only') }}
   ALLOW_VIDEO_GENERATION: ${{ inputs.allow_video_generation || 'false' }}
   ALLOW_FINAL_MERGE: ${{ inputs.allow_final_merge || 'false' }}
   ALLOW_EXPORT: ${{ inputs.allow_export || 'false' }}
@@ -158,6 +162,7 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           node --test tests/nonpaid/p14b8-ui-smoke-safety.test.mjs
           node --test tests/nonpaid/p14c1-license-gate.test.mjs
+          node --test tests/nonpaid/p14c1a-license-gate-smoke.test.mjs
           node --test tests/nonpaid/p14b6-real-smoke-safety.test.mjs
           node --test tests/nonpaid/p14b7-windows-config-sqlite.test.mjs
           node --test tests/nonpaid/p14-windows-config-init.test.mjs
@@ -247,6 +252,7 @@ jobs:
       # hang never reaches the 90-min job timeout. minimal_video needs the full image
       # pipeline PLUS a real Veo video generation, so its backstop is larger.
       - name: Run UI-driven image-only smoke
+        if: ${{ inputs.smoke_scope != 'license_gate' }}
         timeout-minutes: ${{ inputs.smoke_scope == 'minimal_video' && 30 || 12 }}
         shell: pwsh
         env:
@@ -262,6 +268,18 @@ jobs:
           AI_VIDEO_LICENSE_BYPASS: '1'
         run: node scripts/win/ui-smoke-image-only.mjs "$env:AI_VIDEO_STAGE_DIR"
 
+      # P14-C1A: license-gate smoke — gate ENFORCED (AI_VIDEO_LICENSE_REQUIRED=1, NO bypass).
+      # NO model/generation calls; the script generates an in-memory Ed25519 TEST keypair
+      # (the test PRIVATE key never touches disk/logs/artifact) and hands only the test PUBLIC
+      # key to the app. No production private key is used or present in CI.
+      - name: Run license-gate smoke (P14-C1A — gate enforced, no bypass)
+        if: ${{ inputs.smoke_scope == 'license_gate' }}
+        timeout-minutes: 12
+        shell: pwsh
+        env:
+          AI_VIDEO_LICENSE_REQUIRED: '1'
+        run: node scripts/win/license-gate-smoke.mjs "$env:AI_VIDEO_STAGE_DIR"
+
       - name: Upload UI smoke report + screenshots + diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -269,6 +287,7 @@ jobs:
           name: ui-smoke-report-image-only
           path: |
             smoke-report.json
+            license-gate-report.json
             smoke-diagnostics/
           if-no-files-found: warn
 

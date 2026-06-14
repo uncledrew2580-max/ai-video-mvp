@@ -180,7 +180,7 @@ test('C1: image/video smokes bypass the gate (workflow) so B8AI/B8AP stay green'
   const yml = readSrc(WORKFLOW);
   assert.ok(/AI_VIDEO_LICENSE_BYPASS: '1'/.test(yml), 'the smoke step bypasses the gate');
   // the gate smoke (C1A) will run WITHOUT this; image_only/minimal_video defaults unchanged.
-  assert.ok(/REAL_SMOKE_SCOPE: \$\{\{ inputs\.smoke_scope \|\| 'image_only' \}\}/.test(yml), 'image_only default intact');
+  assert.ok(/REAL_SMOKE_SCOPE:\s*\$\{\{[\s\S]{0,90}inputs\.smoke_scope \|\| 'image_only'/.test(yml), 'image_only default intact');
 });
 
 test('C1: minimal_video safety gates + image_only budget are untouched by C1', () => {
