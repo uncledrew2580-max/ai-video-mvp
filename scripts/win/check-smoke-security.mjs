@@ -16,11 +16,18 @@ import { fileURLToPath } from 'node:url';
 export function checkSmokeSecurityGate(env = process.env) {
   const errors = [];
   const scope = env.REAL_SMOKE_SCOPE ?? null;
+  const noPaidFull = env.UI_SMOKE_MODE === 'no_paid_full' || env.AI_VIDEO_NO_PAID_SMOKE === '1';
+  if (noPaidFull && scope !== 'image_only') {
+    errors.push(`no_paid_full requires REAL_SMOKE_SCOPE='image_only', got: ${JSON.stringify(scope)}`);
+  }
 
   if (scope === 'image_only') {
     // Default safe scope: video must be disabled.
     if (env.DISABLE_VIDEO_GENERATION !== 'true') {
       errors.push(`image_only requires DISABLE_VIDEO_GENERATION='true', got: ${JSON.stringify(env.DISABLE_VIDEO_GENERATION ?? null)}`);
+    }
+    if (noPaidFull && env.AI_VIDEO_NO_PAID_SMOKE !== '1') {
+      errors.push(`no_paid_full requires AI_VIDEO_NO_PAID_SMOKE='1', got: ${JSON.stringify(env.AI_VIDEO_NO_PAID_SMOKE ?? null)}`);
     }
   } else if (scope === 'minimal_video') {
     // Opt-in: EXACTLY one video clip. Every invariant must hold; final-merge/export forbidden.
@@ -34,7 +41,7 @@ export function checkSmokeSecurityGate(env = process.env) {
   }
 
   // NEVER log the actual API key value, not even its length.
-  if (!env.AI_VIDEO_API_KEY) {
+  if (!(noPaidFull && scope === 'image_only') && !env.AI_VIDEO_API_KEY) {
     errors.push('AI_VIDEO_API_KEY is not set — configure it in GitHub Secrets (Actions → Settings → Secrets)');
   }
 
@@ -49,6 +56,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     process.exit(1);
   }
   process.stdout.write(
-    '[smoke-security] PASS: REAL_SMOKE_SCOPE=image_only, DISABLE_VIDEO_GENERATION=true, AI_VIDEO_API_KEY present.\n',
+    process.env.AI_VIDEO_NO_PAID_SMOKE === '1'
+      ? '[smoke-security] PASS: REAL_SMOKE_SCOPE=image_only, DISABLE_VIDEO_GENERATION=true, no-paid smoke enabled.\n'
+      : '[smoke-security] PASS: REAL_SMOKE_SCOPE=image_only, DISABLE_VIDEO_GENERATION=true, AI_VIDEO_API_KEY present.\n',
   );
 }

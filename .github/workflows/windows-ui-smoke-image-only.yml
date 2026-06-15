@@ -19,12 +19,13 @@ on:
         required: false
         default: '27188590985'
       mode:
-        description: 'diagnostic = startup/diagnostics only, NO image generation (default); full = real image-only pipeline (requires explicit authorization)'
+        description: 'diagnostic = startup only; no_paid_full = full UI logic with local fixtures/no model calls; full = real image-only pipeline'
         required: false
         default: 'diagnostic'
         type: choice
         options:
           - diagnostic
+          - no_paid_full
           - full
       smoke_scope:
         description: 'image_only | minimal_video | license_gate (C1A gate) | new_machine_restart (C1B: activate → restart → persistence, NO generation, CI test keypair)'
@@ -109,6 +110,7 @@ jobs:
 
       # Fail fast if the required secret is absent — never print the value.
       - name: Check required secrets
+        if: ${{ inputs.mode != 'no_paid_full' }}
         shell: pwsh
         run: |
           if ('${{ secrets.AI_VIDEO_API_KEY }}' -eq '') {
@@ -130,6 +132,8 @@ jobs:
         env:
           REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
           DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
+          UI_SMOKE_MODE: ${{ inputs.mode }}
+          AI_VIDEO_NO_PAID_SMOKE: ${{ inputs.mode == 'no_paid_full' && '1' || '' }}
           AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
         run: node scripts/win/check-smoke-security.mjs
 
@@ -139,6 +143,7 @@ jobs:
         env:
           REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
           DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
+          AI_VIDEO_NO_PAID_SMOKE: ${{ inputs.mode == 'no_paid_full' && '1' || '' }}
         run: >-
           node -e
           "import('./scripts/win/smoke-guard.mjs').then(m => m.selfTest()).catch(e => { console.error(e.message); process.exit(1); })"
@@ -265,6 +270,7 @@ jobs:
           REAL_SMOKE_SCOPE: ${{ env.REAL_SMOKE_SCOPE }}
           DISABLE_VIDEO_GENERATION: ${{ env.DISABLE_VIDEO_GENERATION }}
           UI_SMOKE_MODE: ${{ inputs.mode }}
+          AI_VIDEO_NO_PAID_SMOKE: ${{ inputs.mode == 'no_paid_full' && '1' || '' }}
           AI_VIDEO_API_KEY: ${{ secrets.AI_VIDEO_API_KEY }}
           AI_VIDEO_BASE_URL: ${{ secrets.AI_VIDEO_BASE_URL }}
           # P14-C1: the packaged build now enforces the license gate. The image/video smokes
@@ -320,7 +326,7 @@ jobs:
           if (Test-Path 'smoke-report.json') {
             try {
               $r = Get-Content 'smoke-report.json' -Raw | ConvertFrom-Json
-              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### UI smoke ran`n- status: $($r.status)`n- failed_stage: $($r.failed_stage)`n- app_started: $($r.app_started) / window_state: $($r.window_state)`n- REAL_SMOKE_SCOPE=image_only, DISABLE_VIDEO_GENERATION=true (no Veo/video/final)."
+              Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### UI smoke ran`n- status: $($r.status)`n- failed_stage: $($r.failed_stage)`n- app_started: $($r.app_started) / window_state: $($r.window_state)`n- mode: $($r.mode) / no_paid_full: $($r.no_paid_full)`n- REAL_SMOKE_SCOPE=image_only, DISABLE_VIDEO_GENERATION=true (no Veo/final unless minimal_video is explicitly selected)."
             } catch {
               Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### UI smoke produced a report that could not be parsed."
             }

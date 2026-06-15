@@ -104,6 +104,9 @@ test('B8C: workflow defaults to diagnostic mode (no image generation) and passes
   const yml = readWf();
   assert.ok(/default:\s*'diagnostic'/.test(yml), "mode input must default to 'diagnostic'");
   assert.ok(/UI_SMOKE_MODE:\s*\$\{\{\s*inputs\.mode\s*\}\}/.test(yml), 'must pass inputs.mode as UI_SMOKE_MODE');
+  assert.ok(/options:[\s\S]{0,120}no_paid_full/.test(yml), 'workflow must expose no_paid_full mode');
+  assert.ok(/AI_VIDEO_NO_PAID_SMOKE:\s*\$\{\{\s*inputs\.mode == 'no_paid_full' && '1'/.test(yml),
+    'workflow must pass AI_VIDEO_NO_PAID_SMOKE=1 only for no_paid_full');
 });
 
 test('B8C: the smoke step has a backstop timeout so it never hits the 90-min job timeout', () => {
@@ -167,6 +170,32 @@ test('ui-smoke submits the creative-brief form via the UI (uploads an image)', (
   assert.ok(src.includes('#product-submit-button'), 'must click the real submit button');
 });
 
+test('no_paid_full backend writes local artifacts instead of calling paid webhooks', () => {
+  const src = readServe();
+  for (const fn of [
+    'writeNoPaidSmokeIntakeArtifacts',
+    'writeNoPaidSmokeScriptArtifacts',
+    'writeNoPaidSmokeStoryboardArtifacts',
+    'writeNoPaidSmokeVideoArtifacts',
+  ]) {
+    assert.ok(src.includes(`function ${fn}`), `serve backend must define ${fn}`);
+  }
+  assert.ok(/noPaidSmokeEnabled\(\)[\s\S]{0,180}writeNoPaidSmokeIntakeArtifacts[\s\S]{0,180}return res\.end/.test(src),
+    '/submit-product must return after local no-paid intake artifacts');
+  assert.ok(/noPaidSmokeEnabled\(\)[\s\S]{0,220}writeNoPaidSmokeScriptArtifacts[\s\S]{0,220}return res\.end/.test(src),
+    '/concept-select-with-edit must return after local script artifacts');
+  assert.ok(/noPaidSmokeEnabled\(\)[\s\S]{0,220}writeNoPaidSmokeStoryboardArtifacts[\s\S]{0,220}return res\.end/.test(src),
+    '/script-confirm must return after local storyboard artifacts');
+  const reviewSubmitRoute = src.indexOf("if (req.method === 'POST' && req.url === '/review-submit')");
+  const noPaidBranch = src.indexOf('if (noPaidSmokeEnabled())', reviewSubmitRoute);
+  const localVideo = src.indexOf('writeNoPaidSmokeVideoArtifacts', noPaidBranch);
+  const localReturn = src.indexOf('return res.end', localVideo);
+  const realForward = src.indexOf('await forwardReviewSubmission', noPaidBranch);
+  assert.ok(reviewSubmitRoute > 0 && noPaidBranch > reviewSubmitRoute, '/review-submit must have a no-paid branch');
+  assert.ok(localVideo > noPaidBranch && localReturn > localVideo && realForward > localReturn,
+    '/review-submit must return after local video progress artifacts before any real forwardReviewSubmission');
+});
+
 // ── Full image-only PIPELINE through the UI (Codex P14-B8 review) ─────────────
 
 test('ui-smoke drives the full pipeline: select concept → confirm script → storyboard image', () => {
@@ -223,18 +252,19 @@ test('ui-smoke stopped_at is the storyboard stage (not WF01 concept)', () => {
     'must not stop at the ambiguous image_generation (WF01 concept)');
 });
 
-test('ui-smoke never actively triggers /review-submit or /review-rerun-shot', () => {
+test('ui-smoke only triggers /review-submit inside explicit no_paid_full fixture mode', () => {
   const src = readUi();
-  // 'review-submit' / 'review-rerun-shot' may only appear inside the forbidden
-  // guard list — never as an active goto/click/waitForResponse target.
+  // review-rerun-shot is never a smoke action; review-submit is allowed only in
+  // no_paid_full, where the app server is forced to write local fixture progress
+  // instead of forwarding WF03/Veo.
   assert.ok(!/goto\([^)]*review-submit/.test(src), 'must not navigate to /review-submit');
-  assert.ok(!/click\([^)]*review-submit/i.test(src), 'must not click a review-submit affordance');
-  assert.ok(!/waitForResponse\([^)]*review-submit/.test(src), 'must not await a /review-submit response');
+  assert.ok(/NO_PAID_FULL[\s\S]{0,1200}waitForResponse\(\(r\) => \/\\\/review-submit\\b\//.test(src),
+    'the only active /review-submit wait must be inside NO_PAID_FULL');
+  assert.ok(/NO_PAID_FULL[\s\S]{0,1400}AI_VIDEO_NO_PAID_SMOKE/.test(src),
+    'NO_PAID_FULL must require AI_VIDEO_NO_PAID_SMOKE=1');
   assert.ok(!/goto\([^)]*review-rerun-shot/.test(src) && !/click\([^)]*review-rerun-shot/i.test(src),
     'must not trigger /review-rerun-shot');
-  // And must never click the video / re-generate affordances.
-  assert.ok(!/click\([^)]*生成视频/.test(src) && !/click\([^)]*重新生成分镜图/.test(src),
-    'must not click 生成视频 / 重新生成分镜图');
+  assert.ok(!/click\([^)]*重新生成分镜图/.test(src), 'must not click 重新生成分镜图');
 });
 
 test('ui-smoke does NOT directly write local-config.json or use raw HTTP to stand in for the UI', () => {
@@ -1515,6 +1545,33 @@ test('B8AJ0: security gate — image_only default passes; image_only with video-
   assert.equal((await gate({ ...KEYENV, REAL_SMOKE_SCOPE: 'bogus' })).ok, false);
 });
 
+test('B8AJ0: security gate — no_paid_full is explicit and does not require a real API key', async () => {
+  const ok = await gate({
+    REAL_SMOKE_SCOPE: 'image_only',
+    DISABLE_VIDEO_GENERATION: 'true',
+    UI_SMOKE_MODE: 'no_paid_full',
+    AI_VIDEO_NO_PAID_SMOKE: '1',
+  });
+  assert.equal(ok.ok, true, 'no_paid_full with fixture env passes without AI_VIDEO_API_KEY');
+  const missingFlag = await gate({
+    REAL_SMOKE_SCOPE: 'image_only',
+    DISABLE_VIDEO_GENERATION: 'true',
+    UI_SMOKE_MODE: 'no_paid_full',
+  });
+  assert.equal(missingFlag.ok, false, 'no_paid_full without AI_VIDEO_NO_PAID_SMOKE=1 fails');
+  const mixedScope = await gate({
+    REAL_SMOKE_SCOPE: 'minimal_video',
+    ALLOW_VIDEO_GENERATION: 'true',
+    DISABLE_VIDEO_GENERATION: 'false',
+    MAX_SHOTS: '1',
+    ALLOW_FINAL_MERGE: 'false',
+    ALLOW_EXPORT: 'false',
+    UI_SMOKE_MODE: 'no_paid_full',
+    AI_VIDEO_NO_PAID_SMOKE: '1',
+  });
+  assert.equal(mixedScope.ok, false, 'no_paid_full cannot be mixed with minimal_video');
+});
+
 test('B8AJ0: security gate — minimal_video requires the full invariant set', async () => {
   const base = { ...KEYENV, REAL_SMOKE_SCOPE: 'minimal_video', ALLOW_VIDEO_GENERATION: 'true', DISABLE_VIDEO_GENERATION: 'false', MAX_SHOTS: '1', ALLOW_FINAL_MERGE: 'false', ALLOW_EXPORT: 'false' };
   assert.equal((await gate(base)).ok, true, 'valid minimal_video passes');
@@ -1551,8 +1608,8 @@ test('B8AJ0: interceptor — final-merge/export/rerun ALWAYS forbidden; video tr
     /ALWAYS_FORBIDDEN_REQUEST = \[[\s\S]{0,300}export-project/.test(src),
     'always-forbidden includes final-merge + rerun + export');
   assert.ok(/VIDEO_TRIGGER_REQUEST = \[[\s\S]{0,200}review-submit[\s\S]{0,200}veo/.test(src), 'video triggers grouped separately');
-  assert.ok(/FORBIDDEN_REQUEST = VIDEO_AUTHORIZED[\s\S]{0,120}ALWAYS_FORBIDDEN_REQUEST[\s\S]{0,120}VIDEO_TRIGGER_REQUEST/.test(src),
-    'video triggers blocked only when not authorized; always-forbidden always blocked');
+  assert.ok(/FORBIDDEN_REQUEST = VIDEO_AUTHORIZED[\s\S]{0,360}NO_PAID_FULL[\s\S]{0,220}VIDEO_TRIGGER_REQUEST\.filter/.test(src),
+    'video triggers blocked unless minimal_video is authorized; no_paid_full only permits the local review-submit fixture trigger');
 });
 
 test('B8AJ0: smoke-report has all required minimal_video fields, defaulting safe (image_only)', () => {

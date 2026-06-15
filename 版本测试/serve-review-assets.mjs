@@ -7044,6 +7044,281 @@ function buildSubmitDedupKey(name, market, lang, imageFiles) {
   ].join('|')).digest('hex');
 }
 
+function noPaidSmokeEnabled() {
+  return process.env.AI_VIDEO_NO_PAID_SMOKE === '1';
+}
+
+function productField(parsed, name) {
+  return String((parsed.find((f) => f.name === name && f.type === 'field')?.value || '')).trim();
+}
+
+function noPaidSmokeProjectId(startedAt) {
+  return `proj_smoke_${Number(startedAt || Date.now())}`;
+}
+
+function noPaidSmokeSelectedConcept(productName) {
+  return {
+    concept_id: 'concept_smoke_1',
+    concept_name: 'Fast UGC problem-solution demo',
+    content_goal: 'Use a fast TikTok-native hook to show the product solving one clear everyday pain point.',
+    core_selling_angle: 'White-background product reference controls product shape/color; lifestyle panels only add usage context.',
+    target_user: 'TikTok shoppers who need a practical, easy-to-understand product demo.',
+    usage_scene: 'Everyday home or outdoor use based on the submitted product.',
+    visual_hook: 'Start with an obvious problem in the first 1-2 seconds, then reveal the product entering the frame.',
+    visual_expression: 'Handheld smartphone UGC, short actions, natural light, imperfect but readable framing.',
+    model_profile: 'Local creator style; natural expression, quick reaction, no over-polished commercial acting.',
+    video_type: 'pure_display_or_light_voiceover',
+    why_it_fits_tiktok: 'Clear hook, simple product payoff, fast pacing, and stable first-frame references make it usable for viral testing.',
+    recommended_grid: '6_grid',
+    risk_notes: `Keep ${productName || 'the product'} visually identical to the uploaded white-background reference image.`,
+  };
+}
+
+function noPaidSmokeShots(productName, targetLanguage) {
+  const p = productName || 'the product';
+  const lang = targetLanguage || 'English';
+  return [
+    ['shot_1', 1, 'Hook', '0-3s', 'Close handheld shot of the pain point before the product appears.', 'A hand pauses above the messy or inconvenient scene, showing urgency.', `${p} is not yet centered; product reference must stay identical once it enters.`, 'Fixed handheld close-up with a tiny push-in.', `Quick worried expression or tense hand gesture. Voiceover (${lang}, local creator tone): "Wait, this is exactly the problem."`, 'Keep the same product color, shape, material, and scale from the reference image.'],
+    ['shot_2', 2, 'Product Reveal', '3-6s', 'The product enters frame clearly from the side.', 'Hand places the product in the center and briefly tilts it toward camera.', `${p} fills the center; all visible details match the uploaded reference image.`, 'Slow handheld follow, no zoom jump.', `Relieved, confident tone. Voiceover (${lang}): "This little thing fixes it fast."`, 'Do not morph the product; no extra parts or color changes.'],
+    ['shot_3', 3, 'Demo', '6-10s', 'One simple use action demonstrates the main benefit.', 'The creator performs one clean, easy-to-generate product action.', `Product remains fully visible during the action; use is logical for ${p}.`, 'Static close shot with slight hand movement.', `Focused expression, quick pace. Voiceover (${lang}): "Just one simple move."`, 'Hands must stay natural; product should not drift or resize.'],
+    ['shot_4', 4, 'Proof', '10-14s', 'Show the before/after or immediate result.', 'Hand points to the solved area or the clear result.', `${p} stays in frame as proof, same silhouette and material.`, 'Small pan from product to result.', `Small satisfied reaction. Voiceover (${lang}): "That is way cleaner."`, 'Result must follow from the previous action, no scene jump.'],
+    ['shot_5', 5, 'Lifestyle Fit', '14-19s', 'Show the product fitting naturally into daily life.', 'Creator picks up or stores the product in a realistic location.', `${p} remains the same size and color; no alternate version appears.`, 'Handheld medium close-up.', `Casual, friendly tone. Voiceover (${lang}): "I would actually keep this around."`, 'Keep the same person/hand styling and product orientation.'],
+    ['shot_6', 6, 'Soft Convert', '19-24s', 'Final payoff with the product and solved result visible.', 'Creator gives a small approving gesture or places product beside result.', `${p} is the final hero object, matching the reference image exactly.`, 'Stable close-up, natural light.', `Satisfied but not salesy. Voiceover (${lang}): "Tiny upgrade, real difference."`, 'No text, subtitles, logos, UI, or watermark.'],
+  ].map(([shot_id, shot_order, stage, duration, scene_setting, visual_action, product_state, camera_movement, optional_voiceover_local, continuity_requirements]) => ({
+    shot_id,
+    shot_order,
+    stage,
+    duration,
+    scene_setting,
+    visual_action,
+    product_state,
+    camera_movement,
+    optional_voiceover_local,
+    expression_focus: 'Fast TikTok UGC pacing, clear facial/hand emotion, natural creator energy.',
+    continuity_requirements,
+    video_prompt: [
+      'Duration: 8 seconds.',
+      'Use the corresponding storyboard panel as the first frame.',
+      `Main Action: ${visual_action}`,
+      `Camera: ${camera_movement}`,
+      `Product Focus: ${product_state}`,
+      `Continuity: ${continuity_requirements}`,
+      'Style: handheld smartphone TikTok UGC, natural light, quick readable action, authentic local creator feeling.',
+      'Avoid: text, subtitles, UI, watermark, logo, product morphing, face change, distorted hands, extra fingers, cinematic commercial look.',
+    ].join('\n'),
+    video_prompt_original_zh: [
+      `场景：${scene_setting}`,
+      `动作：${visual_action}`,
+      `产品状态：${product_state}`,
+      `运镜：${camera_movement}`,
+      `情绪：${optional_voiceover_local}`,
+      `连续性：${continuity_requirements}`,
+    ].join('\n'),
+  }));
+}
+
+function writeNoPaidSmokeIntakeArtifacts(parsed, meta, startedAt) {
+  const projectId = noPaidSmokeProjectId(startedAt);
+  const pid = projectId.replace(/[^a-zA-Z0-9_-]+/g, '_');
+  const now = new Date().toISOString();
+  const productName = meta.productName;
+  const productDesc = productField(parsed, 'field-1');
+  const targetMarket = meta.targetMarket || productField(parsed, 'field-2') || '用户填写目标市场';
+  const targetLanguage = meta.targetLanguage || productField(parsed, 'field-3') || '用户填写目标语言';
+  const imageDir = path.join(CACHE_ROOT, 'product-images', pid);
+  fs.mkdirSync(imageDir, { recursive: true });
+  const productImages = meta.imageFiles.map((file, index) => {
+    const ext = path.extname(file.filename || '').toLowerCase() || '.jpg';
+    const safeName = `product_${String(index + 1).padStart(2, '0')}${ext}`;
+    const localPath = path.join(imageDir, safeName);
+    fs.writeFileSync(localPath, file.buffer);
+    return {
+      index: index + 1,
+      original_filename: file.filename || safeName,
+      content_type: file.contentType || 'application/octet-stream',
+      byte_size: file.buffer.length,
+      local_path: localPath,
+      consistency_role: index === 0 ? 'primary_product_reference' : 'supporting_detail_reference',
+    };
+  });
+  const concept = noPaidSmokeSelectedConcept(productName);
+  const contextPath = path.join(CONCEPT_CONTEXT_ROOT, `concept_context_${pid}.json`);
+  const conceptContext = {
+    project_id: projectId,
+    product_name: productName,
+    product_desc: productDesc,
+    product_selling_points: productDesc,
+    target_market: targetMarket,
+    target_language: targetLanguage,
+    creative_task_type: 'no_paid_smoke',
+    product_image_count: productImages.length,
+    product_image_local_paths: productImages.map((img) => img.local_path),
+    product_images_meta: productImages,
+    product_consistency_rule: 'Use the uploaded white-background/product reference image as the primary source of truth for product shape, color, size, material, and visible parts. Supporting scene images may inform context only.',
+    concept_count: 1,
+    creative_concepts: [concept],
+    smoke_fixture: true,
+    created_at: now,
+  };
+  fs.writeFileSync(contextPath, JSON.stringify(conceptContext, null, 2));
+  updateProjectState(projectId, {
+    product_name: productName,
+    product_desc: productDesc,
+    target_market: targetMarket,
+    target_language: targetLanguage,
+    creative_task_type: 'no_paid_smoke',
+    product_image_count: productImages.length,
+    concept_context_path: contextPath,
+    stage: 'creative_generated',
+    status: 'waiting_for_concept_selection',
+    smoke_fixture: true,
+    created_at: now,
+  });
+  return { projectId, contextPath, conceptContext };
+}
+
+function writeNoPaidSmokeScriptArtifacts(projectId, selectedConcept = {}) {
+  const state = readProjectState(projectId);
+  const productName = state.product_name || selectedConcept.product_name || 'Smoke Test Product';
+  const targetLanguage = state.target_language || 'English';
+  const conceptFile = getLatestConceptContextFileForProject(projectId);
+  const conceptPath = conceptFile ? path.join(CONCEPT_CONTEXT_ROOT, conceptFile) : '';
+  const shots = noPaidSmokeShots(productName, targetLanguage);
+  const scriptContext = {
+    project_id: projectId,
+    product_name: productName,
+    product_desc: state.product_desc || '',
+    target_market: state.target_market || '',
+    target_language: targetLanguage,
+    creative_task_type: 'no_paid_smoke',
+    selected_concept_id: selectedConcept.concept_id || selectedConcept.selected_concept_id || 'concept_smoke_1',
+    selected_concept_name: selectedConcept.concept_name || 'Fast UGC problem-solution demo',
+    selected_concept_json: selectedConcept,
+    concept_context_path: conceptPath,
+    structure: {
+      hook: '0-3s: clear visual problem and emotional stop point.',
+      educate: '3-19s: reveal product, show one simple action, prove the result.',
+      convert: '19-24s: soft payoff, creator-level recommendation without hard ad tone.',
+    },
+    shots,
+    smoke_fixture: true,
+    created_at: new Date().toISOString(),
+  };
+  fs.mkdirSync(SCRIPT_CONTEXT_ROOT, { recursive: true });
+  fs.writeFileSync(scriptContextPath(projectId), JSON.stringify(scriptContext, null, 2));
+  updateProjectState(projectId, {
+    stage: 'script_generated',
+    status: 'script_generated',
+    script_context_path: scriptContextPath(projectId),
+    selected_concept_id: scriptContext.selected_concept_id,
+  });
+  return scriptContext;
+}
+
+function writeNoPaidSmokeStoryboardArtifacts(projectId) {
+  const pid = String(projectId).replace(/[^a-zA-Z0-9_-]+/g, '_');
+  const scriptContext = fs.existsSync(scriptContextPath(projectId)) ? readContextFile(scriptContextPath(projectId)) : writeNoPaidSmokeScriptArtifacts(projectId, {});
+  const shots = Array.isArray(scriptContext.shots) ? scriptContext.shots : noPaidSmokeShots(scriptContext.product_name || '', scriptContext.target_language || '');
+  const conceptFile = getLatestConceptContextFileForProject(projectId);
+  const conceptContext = conceptFile ? readContextFile(path.join(CONCEPT_CONTEXT_ROOT, conceptFile)) : {};
+  const productPaths = Array.isArray(conceptContext.product_image_local_paths) ? conceptContext.product_image_local_paths : [];
+  const sourceImage = productPaths.find((p) => p && fs.existsSync(p)) || path.join(PROJECT_ROOT, 'tests', 'fixtures', 'ui-smoke-product.jpg');
+  const previewDir = path.join(CACHE_ROOT, '分镜图裁剪', 'previews');
+  const fullDir = path.join(CACHE_ROOT, '分镜图裁剪', 'full');
+  fs.mkdirSync(previewDir, { recursive: true });
+  fs.mkdirSync(fullDir, { recursive: true });
+  const panels = shots.map((shot, index) => {
+    const order = Number(shot.shot_order || index + 1);
+    const previewPath = path.join(previewDir, `panel_preview_${pid}_${String(order).padStart(2, '0')}.jpg`);
+    const fullPath = path.join(fullDir, `panel_full_${pid}_${String(order).padStart(2, '0')}.jpg`);
+    try {
+      fs.copyFileSync(sourceImage, previewPath);
+      fs.copyFileSync(sourceImage, fullPath);
+    } catch {
+      fs.writeFileSync(previewPath, '');
+      fs.writeFileSync(fullPath, '');
+    }
+    return {
+      ...shot,
+      panel_preview_path: previewPath,
+      panel_full_path: fullPath,
+      panel_preview_url: '',
+      product_reference_image_path: sourceImage,
+    };
+  });
+  const reviewContextPath = path.join(REVIEW_CONTEXT_ROOT, `review_context_${pid}_round1.json`);
+  const reviewContext = {
+    project_id: projectId,
+    product_name: scriptContext.product_name || '',
+    target_market: scriptContext.target_market || '',
+    target_language: scriptContext.target_language || '',
+    selected_concept_name: scriptContext.selected_concept_name || '',
+    creative_task_type: 'no_paid_smoke',
+    review_round: 1,
+    panel_count: panels.length,
+    panel_review_pack: panels,
+    product_consistency_rule: 'Each panel uses the uploaded product reference image as the authoritative product identity source.',
+    smoke_fixture: true,
+    created_at: new Date().toISOString(),
+  };
+  fs.writeFileSync(reviewContextPath, JSON.stringify(reviewContext, null, 2));
+  updateProjectState(projectId, {
+    stage: 'storyboard_ready_for_review',
+    status: 'storyboard_ready_for_review',
+    review_context_path: reviewContextPath,
+    panel_count: panels.length,
+  });
+  return { reviewContextPath, reviewContext };
+}
+
+function writeNoPaidSmokeVideoArtifacts(formBody, reviewContext) {
+  const projectId = formBody.project_id || reviewContext.project_id || '';
+  const pid = String(projectId).replace(/[^a-zA-Z0-9_-]+/g, '_');
+  const panels = Array.isArray(reviewContext.panel_review_pack) ? reviewContext.panel_review_pack : [];
+  const now = new Date().toISOString();
+  fs.mkdirSync(VIDEO_OUTPUT_ROOT, { recursive: true });
+  const shots = panels.map((panel, index) => {
+    const order = Number(panel.shot_order || index + 1);
+    const videoPath = path.join(VIDEO_OUTPUT_ROOT, `kie_veo31_${pid}_${String(order).padStart(2, '0')}_no_paid_smoke.mp4`);
+    if (!fs.existsSync(videoPath)) fs.writeFileSync(videoPath, 'NO_PAID_SMOKE_PLACEHOLDER_MP4');
+    return {
+      shot_id: panel.shot_id || `shot_${order}`,
+      shot_order: order,
+      status: 'completed',
+      video_path: videoPath,
+      operation_name: `no_paid_smoke_${order}`,
+      started_at: now,
+      completed_at: now,
+      error: '',
+    };
+  });
+  const finalDir = path.join(CACHE_ROOT, 'final-video');
+  fs.mkdirSync(finalDir, { recursive: true });
+  const finalPath = path.join(finalDir, `final_${pid}_no_paid_smoke.mp4`);
+  if (!fs.existsSync(finalPath)) fs.writeFileSync(finalPath, 'NO_PAID_SMOKE_FINAL_PLACEHOLDER_MP4');
+  const progress = {
+    project_id: projectId,
+    review_context_path: formBody.review_context_path,
+    status: 'success',
+    total_panels: shots.length,
+    completed_count: shots.length,
+    running_count: 0,
+    failed_count: 0,
+    shots,
+    final_merged_video_path: finalPath,
+    smoke_fixture: true,
+    updated_at: now,
+  };
+  fs.writeFileSync(progressSidecarPath(projectId), JSON.stringify(progress, null, 2));
+  updateProjectState(projectId, {
+    stage: 'final_generated',
+    status: 'success',
+    video_clip_count: shots.length,
+    final_merged_video_path: finalPath,
+  });
+  return progress;
+}
+
 const server = http.createServer(async (req, res) => {
   if (!req.url) {
     res.writeHead(400);
@@ -7181,6 +7456,11 @@ const server = http.createServer(async (req, res) => {
       }
       const submitStartedAt = Date.now();
       _recentSubmits.set(_spDedupKey, { since: submitStartedAt, ts: submitStartedAt });
+      if (noPaidSmokeEnabled()) {
+        writeNoPaidSmokeIntakeArtifacts(_submitParsed, _submitMeta, submitStartedAt);
+        res.writeHead(302, { Location: `/submitted?since=${submitStartedAt}`, 'Cache-Control': 'no-store' });
+        return res.end();
+      }
       await submitProductToN8n(req, _submitBody);
       // Use pre-submit timestamp so getLatestProjectState can find files written during execution.
       // If we used Date.now() here (post-return), the file mtime would be < since and never found.
@@ -7280,6 +7560,18 @@ const server = http.createServer(async (req, res) => {
           revision_source: revision.updated_at ? 'manual_edit' : 'model_output',
           revision_state_path: conceptRevisionPath(formBody.project_id),
         });
+      }
+      if (noPaidSmokeEnabled()) {
+        writeNoPaidSmokeScriptArtifacts(formBody.project_id, selectedConcept || {});
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(
+          renderConceptSubmitPage({
+            ok: true,
+            message: '',
+            contextPath: formBody.concept_context_path,
+            executionId: 'no_paid_smoke',
+          }),
+        );
       }
       await forwardConceptSelection(formBody);
       const execution = findLatestExecutionForProject(formBody.project_id, CONCEPT_SELECT_WORKFLOW_ID);
@@ -7388,6 +7680,18 @@ const server = http.createServer(async (req, res) => {
         revision_source: 'manual_edit',
         revision_state_path: conceptRevisionPath(projectId),
       });
+      if (noPaidSmokeEnabled()) {
+        writeNoPaidSmokeScriptArtifacts(projectId, { ...nextConcept, ...revision.fields, concept_id: conceptId });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(
+          renderConceptSubmitPage({
+            ok: true,
+            message: '',
+            contextPath,
+            executionId: 'no_paid_smoke',
+          }),
+        );
+      }
       await forwardConceptSelection({
         project_id: projectId,
         selected_concept_id: conceptId,
@@ -7532,6 +7836,61 @@ const server = http.createServer(async (req, res) => {
         6,
       );
       const needsRedo = /重做|redo|reject|revise/i.test(rawDecision);
+
+      if (noPaidSmokeEnabled()) {
+        if (needsRedo) {
+          if (!formBody.project_id) throw new Error('缺少 project_id，无法重新生成分镜。');
+          markDownstreamStale(formBody.project_id, 'storyboard_regenerated', 'storyboard');
+          const { reviewContextPath } = writeNoPaidSmokeStoryboardArtifacts(formBody.project_id);
+          fs.writeFileSync(
+            submittedSidecarPath(reviewContextPath),
+            JSON.stringify(
+              {
+                submittedAt: new Date().toISOString(),
+                review_decision: formBody.review_decision,
+                executionId: 'no_paid_smoke',
+                redirected_stage: 'storyboard_regeneration',
+                smoke_fixture: true,
+              },
+              null,
+              2,
+            ),
+          );
+          const _redoActiveUrl = `/active?project_id=${encodeURIComponent(formBody.project_id)}`;
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+          return res.end(`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="1; url=${_redoActiveUrl}"><title>分镜重新生成中</title>${commonCSS()}</head><body>${renderStageNav('storyboard')}<main style="max-width:680px;"><div class="card" style="margin-top:40px;"><h1>分镜图重新生成中…</h1><p>无付费冒烟模式已写入新的本地分镜审核数据。</p><div class="btn-row"><a class="btn btn-primary" href="${_redoActiveUrl}">进入当前项目</a><a class="btn btn-secondary" href="/reviews">分镜列表</a></div></div></main></body></html>`);
+        }
+
+        writeNoPaidSmokeVideoArtifacts(formBody, reviewContext);
+        fs.writeFileSync(
+          submittedSidecarPath(formBody.review_context_path),
+          JSON.stringify(
+            {
+              submittedAt: new Date().toISOString(),
+              review_decision: formBody.review_decision,
+              bad_shot_ids: formBody.bad_shot_ids,
+              executionId: 'no_paid_smoke',
+              executionStatus: 'success',
+              redirected_stage: 'video_generation',
+              project_context: buildRunContextSummary(formBody.project_id),
+              selected_concept_json: readContextFile(selectedConceptSidecarPath(formBody.project_id)).selected_concept_json || {},
+              prompt_center_version: loadPromptCenter()._version || '',
+              smoke_fixture: true,
+            },
+            null,
+            2,
+          ),
+        );
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(
+          renderSubmitResultPage({
+            ok: true,
+            message: `无付费冒烟：已模拟 ${submittedShotCount} 个镜头的视频进度，未调用 Veo。`,
+            contextPath: formBody.review_context_path,
+            executionId: 'no_paid_smoke',
+          }),
+        );
+      }
 
       // B1: Project-level idempotency guard — only for normal (non-redo) submissions
       if (!needsRedo && formBody.project_id) {
@@ -9333,6 +9692,12 @@ const server = http.createServer(async (req, res) => {
         auto_export_summary: null,
         export_summary: null,
       });
+
+      if (noPaidSmokeEnabled()) {
+        writeNoPaidSmokeStoryboardArtifacts(projectId);
+        res.writeHead(302, { Location: `/storyboard-status?project_id=${encodeURIComponent(projectId)}` });
+        return res.end();
+      }
 
       // Trigger WF02B
       const webhookUrl = resolveStoryboardGenerateWebhookUrl();

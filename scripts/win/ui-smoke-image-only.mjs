@@ -9,6 +9,10 @@
 //       the API Key in the UI, verify 已配置, read output dir, read WF presence.
 //       It STOPS there and NEVER submits the brief, so NO model/image generation
 //       happens. Used by CI to validate the startup + fast-fail + diagnostics path.
+//   no_paid_full — launch → submit the real UI product form with the bundled fish-rod
+//       image → select concept → confirm script → review storyboard → confirm video.
+//       The app server is forced into AI_VIDEO_NO_PAID_SMOKE=1 and writes local fixture
+//       artifacts instead of calling n8n/model/image/video webhooks.
 //   full — the complete image-only pipeline (submit brief → select concept → wait
 //       for script → confirm script → storyboard/Nano image on the review page),
 //       stopping before any video. Only for an explicitly authorized real run.
@@ -67,7 +71,8 @@ const STAGE = STAGE_ARG
   : path.join(ROOT, 'dist-win', 'AI-Video-Win-x64-Portable-RC-0001');
 
 const MODE = (process.env.UI_SMOKE_MODE || 'diagnostic').trim().toLowerCase();
-const FULL = MODE === 'full';
+const NO_PAID_FULL = MODE === 'no_paid_full';
+const FULL = MODE === 'full' || NO_PAID_FULL;
 
 // ── Fast-fail budgets (B8C) ───────────────────────────────────────────────────
 const APP_LAUNCH_MS = 60_000;   // <=60s to spawn the Electron app
@@ -112,7 +117,12 @@ const VIDEO_TRIGGER_REQUEST = [
 // a single video clip is explicitly authorized.
 const FORBIDDEN_REQUEST = VIDEO_AUTHORIZED
   ? ALWAYS_FORBIDDEN_REQUEST
-  : [...ALWAYS_FORBIDDEN_REQUEST, ...VIDEO_TRIGGER_REQUEST];
+  : (NO_PAID_FULL
+      ? [
+          ...ALWAYS_FORBIDDEN_REQUEST,
+          ...VIDEO_TRIGGER_REQUEST.filter((rx) => !String(rx).includes('review-submit')),
+        ]
+      : [...ALWAYS_FORBIDDEN_REQUEST, ...VIDEO_TRIGGER_REQUEST]);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -127,6 +137,8 @@ const report = {
   scope: smokeScope(),
   ui_driven: true,
   mode: MODE,
+  no_paid_full: NO_PAID_FULL,
+  no_paid_smoke_env: process.env.AI_VIDEO_NO_PAID_SMOKE === '1',
   real_smoke_scope: process.env.REAL_SMOKE_SCOPE,
   disable_video_generation: process.env.DISABLE_VIDEO_GENERATION,
   timestamp: new Date().toISOString(),
@@ -214,13 +226,16 @@ const report = {
   script_generated_via_ui: false,
   script_confirmed_via_ui: false,
   storyboard_image_generated_via_ui: false,
+  no_paid_video_submitted_via_ui: false,
+  no_paid_video_status_reached: false,
+  no_paid_video_completed_count: null,
   image_ok: null,
   image_url: null,
   // stop-proof — image_only never reaches video; minimal_video reaches EXACTLY one clip.
   video_generation_skipped: true,
   veo_not_called: true,
   final_merge_not_called: true,
-  stopped_at: FULL ? 'storyboard_ready_for_review' : 'diagnostic_no_generation',
+  stopped_at: NO_PAID_FULL ? 'no_paid_full_pending' : (FULL ? 'storyboard_ready_for_review' : 'diagnostic_no_generation'),
   // ── P14-C1: license-gate diagnostics (redacted — no activation code / key / device raw) ──
   license_required: null,
   license_present: null,
@@ -1336,7 +1351,11 @@ async function main() {
   report.api_key_provided = Boolean(apiKey);
   if (apiKey) console.log('[ui-smoke] AI_VIDEO_API_KEY present (value hidden)');
   else console.log('[ui-smoke] AI_VIDEO_API_KEY not provided');
-  if (FULL && !apiKey) { fail('api_key_missing', new Error('AI_VIDEO_API_KEY is required for full mode'), apiKey); return; }
+  if (MODE === 'full' && !apiKey) { fail('api_key_missing', new Error('AI_VIDEO_API_KEY is required for full mode'), apiKey); return; }
+  if (NO_PAID_FULL && process.env.AI_VIDEO_NO_PAID_SMOKE !== '1') {
+    fail('no_paid_smoke_env_missing', new Error('no_paid_full requires AI_VIDEO_NO_PAID_SMOKE=1'), apiKey);
+    return;
+  }
 
   // Hard overall watchdog — never hang to the GitHub job timeout. B8AM: if a video clip
   // was being generated when the cap hit, collect the video diagnostics FIRST (so the
@@ -1371,7 +1390,15 @@ async function main() {
 
   // ── Launch (fast, <=60s) ────────────────────────────────────────────────────
   try {
-    appRef = await electron.launch({ executablePath: exe, args: [], timeout: APP_LAUNCH_MS });
+    appRef = await electron.launch({
+      executablePath: exe,
+      args: [],
+      timeout: APP_LAUNCH_MS,
+      env: {
+        ...process.env,
+        AI_VIDEO_NO_PAID_SMOKE: NO_PAID_FULL ? '1' : (process.env.AI_VIDEO_NO_PAID_SMOKE || ''),
+      },
+    });
     report.app_started = true;
     report.stages.push('app_started');
     try {
@@ -1901,6 +1928,36 @@ async function main() {
             // B8AH: capture the render diagnostics on SUCCESS too (proves /local-file 200,
             // exact file paths, DOM load) — must NOT flip review_panel_image_present.
             try { await collectReviewRenderDiagnostics(report, page, uiBase); } catch {}
+            if (NO_PAID_FULL) {
+              const videoResp = page.waitForResponse((r) => /\/review-submit\b/.test(r.url()) && r.request().method() === 'POST', { timeout: 60000 });
+              const videoBtn = await firstLocator(page, [
+                'form[action="/review-submit"] button.btn-primary',
+                'button:has-text("确认分镜图")',
+              ]);
+              if (!videoBtn) {
+                report.errors.push('no_paid_full: review-submit button not found');
+              } else {
+                await videoBtn.scrollIntoViewIfNeeded().catch(() => {});
+                await videoBtn.click();
+                const vr = await videoResp.catch(() => null);
+                report.no_paid_video_submitted_via_ui = Boolean(vr && vr.status() < 400);
+                await page.waitForURL(/\/review-status/, { timeout: 60000 }).catch(() => {});
+                const onVideoStatus = /\/review-status/.test(page.url());
+                report.no_paid_video_status_reached = onVideoStatus;
+                if (onVideoStatus) {
+                  await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+                  await screenshot(page, '08-no-paid-video-status.png');
+                  const videoText = await page.locator('body').innerText().catch(() => '');
+                  const m = videoText.match(/完成：\s*(\d+)/);
+                  report.no_paid_video_completed_count = m ? Number(m[1]) : null;
+                  if (!/视频生成状态/.test(videoText) || !(report.no_paid_video_completed_count > 0)) {
+                    report.errors.push('no_paid_full: video status page did not show completed fixture clips');
+                  }
+                } else {
+                  report.errors.push('no_paid_full: review-submit did not reach video status page');
+                }
+              }
+            }
           } else {
             report.image_ok = false; report.errors.push('storyboard review reached but no panel image');
             report.review_panel_image_present = false;
@@ -1983,6 +2040,22 @@ async function main() {
     else stage = 'video_file_not_saved'; // H
     report.error_message = report.error_message || report.video_error_message || 'minimal video clip was not generated';
     fail(stage, new Error(report.error_message), apiKey); return;
+  }
+
+  if (NO_PAID_FULL) {
+    if (report.forbidden_requests_blocked.length > 0) { fail('forbidden_request', new Error('forbidden paid/video request attempted during no_paid_full'), apiKey); return; }
+    if (storyboardOk && report.no_paid_video_submitted_via_ui === true && report.no_paid_video_status_reached === true && report.no_paid_video_completed_count > 0) {
+      report.status = 'passed';
+      report.stopped_at = 'no_paid_full_video_status';
+      report.video_generation_skipped = true;
+      report.veo_not_called = true;
+      console.log('[ui-smoke] PASS: no-paid full UI flow reached video status with local fixture clips.');
+      finalize(0, apiKey);
+      return;
+    }
+    report.error_message = report.error_message || 'no_paid_full did not reach the mocked video status page';
+    fail('no_paid_full_video_status_not_reached', new Error(report.error_message), apiKey);
+    return;
   }
 
   // ── image_only verdict (default — unchanged) ──────────────────────────────────
