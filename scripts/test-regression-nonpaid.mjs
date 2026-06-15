@@ -129,6 +129,7 @@ const serverEnv = {
   WORKFLOW_DATA_ROOT:   tmpRoot,
   REVIEW_ASSET_PORT:    String(TEST_PORT),
   AI_VIDEO_CONFIG_PATH: path.join(tmpRoot, 'local-config.json'),
+  AI_VIDEO_ALLOW_TEST_OUTPUT_DIR: '1',
   N8N_DB_PATH:          TEST_DB_PATH,
 };
 

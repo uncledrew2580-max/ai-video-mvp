@@ -16,6 +16,7 @@ const ROOT = path.join(__dirname, '..', '..');
 
 const PC_PATH   = path.join(ROOT, 'prompts', 'prompt_center.json');
 const PC2_PATH  = path.join(ROOT, '版本测试', 'prompts', 'prompt_center.json');
+const N8N01     = path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n01.json');
 const N8N02B    = path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n02b.json');
 const N8N02A    = path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n02a.json');
 
@@ -245,7 +246,7 @@ function assertBoth(label, fn) {
 
 // ═══ [13] n8n workflow JSON validity (no regression from P2B patches) ════════
 {
-  for (const wfPath of [N8N02A, N8N02B,
+  for (const wfPath of [N8N01, N8N02A, N8N02B,
        path.join(ROOT, '正式導入文件'.normalize('NFC').replace('導', '式导'), 'iteration-v1', 'n8n01.json'),
        path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n03.json')]) {
     try {
@@ -295,7 +296,8 @@ function assertBoth(label, fn) {
   }
   const mockVars = { product_name: '__TEST__', product_desc: '', target_market: 'VN',
                      target_language: 'Vietnamese', creative_task_type: '痛点前置',
-                     creative_task_type_rules: '{}', reference_case_url: '' };
+                     creative_task_type_rules: '{}', reference_case_url: '',
+                     product_images_json: '[]', product_consistency_rule: '' };
   const dirText = tpl(pc.director.user_template, mockVars);
   const unresolved = dirText.match(/\{\{[^}]+\}\}/g);
   assert.ok(!unresolved || unresolved.length === 0,
@@ -316,6 +318,72 @@ function assertBoth(label, fn) {
   });
 }
 
+// ═══ [16] Product-reference handoff: all uploaded images + primary identity ══
+{
+  assertBoth('16 prompts', (pc, file) => {
+    for (const [stage, tpl] of [
+      ['director', pc.director.user_template],
+      ['script', pc.script.user_template],
+      ['storyboard', pc.storyboard.user_template],
+    ]) {
+      assert.ok(tpl.includes('product_images_json'), `${file}: ${stage}.user_template must expose product_images_json`);
+      assert.ok(tpl.includes('product_consistency_rule'), `${file}: ${stage}.user_template must expose product_consistency_rule`);
+      assert.ok(tpl.includes('白底图') || tpl.includes('primary_product_reference'),
+        `${file}: ${stage}.user_template must explain primary/white-background product reference priority`);
+    }
+    assert.ok(pc.director.system_instruction.includes('产品参考图优先级'),
+      `${file}: director system must define product reference priority`);
+    assert.ok(pc.script.system_instruction.includes('主产品参考图优先级'),
+      `${file}: script system must define product reference priority`);
+    assert.ok(pc.storyboard.system_instruction.includes('分镜主产品锁定'),
+      `${file}: storyboard system must lock primary product identity`);
+  });
+
+  const wf01 = loadWf(N8N01);
+  const loadImages = wfNodeCode(wf01, '加载默认测试图片');
+  const directorReq = wfNodeCode(wf01, '导演请求体组装');
+  const conceptExtract = wfNodeCode(wf01, '创意方向提取');
+  const saveConcept = wfNodeCode(wf01, '保存创意方向上下文');
+  assert.ok(loadImages.includes('for (let i = 0; i < maxImages; i++)'),
+    'WF01 must preserve all uploaded images up to the UI max');
+  assert.ok(loadImages.includes('primary_product_reference') && loadImages.includes('supporting_detail_reference'),
+    'WF01 must tag primary vs supporting product references');
+  assert.ok(directorReq.includes('collectImageParts') && directorReq.includes('product_images_json'),
+    'WF01 director request must send dynamic image parts and image metadata');
+  assert.ok(conceptExtract.includes('input.product_image_local_paths.length > 0'),
+    'WF01 concept extraction must keep a single uploaded image path, not require >=2');
+  assert.ok(conceptExtract.includes('directPaths.length > 0'),
+    'WF01 concept extraction must keep one image from product_images_meta');
+  assert.ok(saveConcept.includes('product_image_count') && saveConcept.includes('product_consistency_rule'),
+    'WF01 concept context must retain image count and product consistency rule');
+
+  const wf02a = loadWf(N8N02A);
+  const scriptReq = wfNodeCode(wf02a, '脚本请求体组装');
+  const scriptSave = wfNodeCode(wf02a, '写脚本框架上下文');
+  assert.ok(scriptReq.includes('for (let i = 0; i < imageCount; i++)'),
+    'WF02A script request must loop through uploaded images, not hardcode only image_1/image_2');
+  assert.ok(scriptReq.includes('product_images_json') && scriptReq.includes('产品一致性硬规则'),
+    'WF02A script request must inject product image metadata and identity rules');
+  assert.ok(scriptSave.includes('image_5_path') && scriptSave.includes('product_consistency_rule'),
+    'WF02A script context must preserve up to five image paths plus product consistency rule');
+
+  const wf02b = loadWf(N8N02B);
+  const storyboardReq = wfNodeCode(wf02b, 'Code in JavaScript1');
+  const localImages = wfNodeCode(wf02b, '本地图片转Gemini输入');
+  const nanoAssemble = wfNodeCode(wf02b, '组装NanoBanana执行字段');
+  assert.ok(storyboardReq.includes('for (let i = 0; i < imageCount; i++)'),
+    'WF02B storyboard prompt request must loop through uploaded images');
+  assert.ok(storyboardReq.includes('product_images_json') && storyboardReq.includes('产品一致性硬规则'),
+    'WF02B storyboard prompt request must inject product image metadata and identity rules');
+  assert.ok(localImages.includes('fallback_primary_product_reference') &&
+            localImages.includes('first_uploaded_reference_fallback'),
+    'WF02B image collector must fall back to the first uploaded image when no white-background identity image is detected');
+  assert.ok(nanoAssemble.includes('clean_background_identity_reference_count') &&
+            nanoAssemble.includes('No clear white-background/product-only reference was detected'),
+    'WF02B Nano prompt must distinguish clean product identity refs from fallback primary refs');
+  console.log('PASS [16] product-reference handoff: all uploaded images + primary identity');
+}
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log('');
-console.log('prompt-p2b nonpaid tests: ALL PASS (15/15)');
+console.log('prompt-p2b nonpaid tests: ALL PASS (16/16)');

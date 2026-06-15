@@ -537,6 +537,14 @@ function isOutputPathSafe(p) {
   if (!p || !p.trim()) return { ok: false, reason: '路径未配置' };
   let normalized;
   try { normalized = path.resolve(expandPath(p.trim())); } catch { return { ok: false, reason: '路径无效' }; }
+  if (process.env.AI_VIDEO_ALLOW_TEST_OUTPUT_DIR === '1') {
+    try {
+      const testRoot = path.resolve(WORKFLOW_DATA_ROOT);
+      if (normalized === testRoot || normalized.startsWith(testRoot + path.sep)) {
+        return { ok: true, normalized };
+      }
+    } catch {}
+  }
   const DANGER = [
     /\.app\//i,
     /\.app$/i,
