@@ -11,6 +11,9 @@ on:
     paths:
       - '.github/workflows/windows-portable.yml'
       - 'scripts/win/**'
+      - 'prompts/**'
+      - '版本测试/prompts/**'
+      - '正式导入文件/iteration-v1/**'
       - 'desktop/win-main.cjs'
       - 'electron-builder-win.json'
       - 'tests/nonpaid/p14-windows-final-merge.test.mjs'
@@ -19,6 +22,7 @@ on:
       - 'tests/nonpaid/p14-windows-desktop-shell.test.mjs'
       - 'tests/nonpaid/p14b7-windows-config-sqlite.test.mjs'
       - 'tests/nonpaid/p14b8g-workflow-sync-fk.test.mjs'
+      - 'tests/nonpaid/p14c2-windows-business-assets.test.mjs'
       - 'lib/sqlite-exec.mjs'
       - 'client/launcher.mjs'
       - '版本测试/serve-review-assets.mjs'
@@ -139,11 +143,17 @@ jobs:
         shell: pwsh
         run: node scripts/win/assemble-windows-portable.mjs
 
+      - name: Verify business assets frozen into Windows artifact
+        shell: pwsh
+        run: node scripts/win/verify-business-assets.mjs "dist-win/AI-Video-Win-x64-Portable-RC-0001/resources/runtime"
+
       # P14-B5 nonpaid: desktop shell shape checks against mock dirs (offline, no
       # model calls). Run after assemble so the real staging tree is available too.
       - name: Windows nonpaid tests (desktop shell + client-shape P14-B5)
         shell: pwsh
-        run: node --test tests/nonpaid/p14-windows-desktop-shell.test.mjs
+        run: |
+          node --test tests/nonpaid/p14-windows-desktop-shell.test.mjs
+          node --test tests/nonpaid/p14c2-windows-business-assets.test.mjs
 
       # P14-B3/B5: enforce the small-user "client" shape (engineering tree hidden
       # under resources/runtime/; AI Video.exe at root, cmd at tools/).

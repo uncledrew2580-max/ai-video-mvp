@@ -155,6 +155,10 @@ jobs:
           Write-Host "Stage dir resolved: $stageDir  (AI Video.exe present)"
           "AI_VIDEO_STAGE_DIR=$stageDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Verify business assets in downloaded artifact
+        shell: pwsh
+        run: node scripts/win/verify-business-assets.mjs "$env:AI_VIDEO_STAGE_DIR/resources/runtime"
+
       # Real smoke: scope guard and selfTest run at startup, then ONE image task
       # is submitted and polled until result. Stops after image — no Veo/video/merge.
       - name: Run image-only smoke

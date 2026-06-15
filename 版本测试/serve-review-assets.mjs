@@ -4767,7 +4767,7 @@ function renderReviewStatusPage(contextPath) {
   const rawShots = Array.isArray(progress.shots) && progress.shots.length
     ? progress.shots
     : panelPack.map((panel) => ({ shot_id: panel.shot_id || `shot_${panel.shot_order || ''}`, shot_order: panel.shot_order || '', status: 'pending', video_path: '', operation_name: '' }));
-  const isPaused = Boolean(progress.paused || submitted.paused);
+  const rawIsPaused = Boolean(progress.paused || submitted.paused);
   const executionErrorSummary = executionFailed ? readExecutionErrorSummary(execution.id) : '';
   const isPauseStopError = /项目已暂停|不再提交新视频任务|paused/i.test(executionErrorSummary);
   const hasRealProgress = Array.isArray(rawProgress.shots) && rawProgress.shots.length > 0;
@@ -4780,12 +4780,14 @@ function renderReviewStatusPage(contextPath) {
       ? { ...shot, status: 'completed', video_path: detectedVideoPath, error: '' }
       : shot;
   });
-  const _execSucceeded = execution?.status === 'success' && !isPaused;
+  const _execSucceeded = execution?.status === 'success' && !rawIsPaused;
   const shots = shotsWithDetectedVideos.map((shot) => reconcileStaleShotStatus(shot, _execSucceeded));
   const completedCount = shots.filter((s) => String(s.status || '') === 'completed').length || Number(progress.completed_count || 0) || videos.length || 0;
   const runningCount = execution?.status === 'success' ? 0 : shots.filter((s) => ['running', 'submitted', 'processing'].includes(String(s.status || ''))).length || Number(progress.running_count || 0);
   const failedCount = shots.filter((s) => String(s.status || '') === 'failed').length || Number(progress.failed_count || 0);
   const pendingCount = Math.max(totalPanels - completedCount - runningCount - failedCount, 0);
+  const allClipsComplete = completedCount >= totalPanels && totalPanels > 0;
+  const isPaused = rawIsPaused && !allClipsComplete;
   const percent = totalPanels ? Math.min(100, Math.round((completedCount / totalPanels) * 100)) : 0;
   const failedShots = shots.filter((s) => String(s.status || '') === 'failed');
   const finalMergedVideoPath = String(progress.final_merged_video_path || '').trim();
@@ -7913,18 +7915,24 @@ const server = http.createServer(async (req, res) => {
       if (!formBody.review_context_path || !fs.existsSync(formBody.review_context_path)) {
         throw new Error('审核上下文不存在，无法继续生成剩余镜头。');
       }
-      // B-fix: block if generation already active (prevents concurrent executions)
-      const _activeCheck = isVideoGenerationActive(projectId);
-      if (_activeCheck.active) {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-        return res.end(renderSubmitResultPage({ ok: false, message: _activeCheck.reason }));
-      }
       // B-fix: verify real pending shots exist before forwarding
       const _progChk = readProgressFile(projectId);
       const _pendingShots = Array.isArray(_progChk.shots) ? _progChk.shots.filter(s => {
         const st = String(s.status || 'pending').toLowerCase();
         return st === 'pending' || st === '';
       }) : [];
+      const _activeShots = Array.isArray(_progChk.shots) ? _progChk.shots.filter(s => {
+        const st = String(s.status || '').toLowerCase();
+        return st === 'running' || st === 'submitted' || st === 'processing';
+      }) : [];
+      // B-fix: block duplicate paid submissions, but allow a paused project to resume
+      // pending shots after the old execution stopped submitting new work.
+      const _activeCheck = isVideoGenerationActive(projectId);
+      const _pausedResumeSafe = Boolean(_progChk.paused) && _pendingShots.length > 0 && _activeShots.length === 0;
+      if (_activeCheck.active && !_pausedResumeSafe) {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(renderSubmitResultPage({ ok: false, message: _activeCheck.reason }));
+      }
       if (!Array.isArray(_progChk.shots) || _progChk.shots.length === 0 || _pendingShots.length === 0) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(renderSubmitResultPage({ ok: false, message: '所有镜头已完成，无需继续生成。如有问题请导出诊断包。' }));

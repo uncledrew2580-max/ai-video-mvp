@@ -452,6 +452,9 @@ function resolveCommit() {
 function sha256File(file) {
   return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 }
+function sha256RuntimeAsset(rel) {
+  return sha256File(path.join(RUNTIME_DIR, rel));
+}
 
 function main() {
   const nodeExe = path.join(ROOT, 'runtime', 'bin', 'node.exe');
@@ -523,6 +526,14 @@ function main() {
     ffmpeg_sha256: ffSha,
     zip_sha256: '', // filled by zip-windows-portable.mjs after compression
     final_merge: 'stream copy (-c copy) via AI_VIDEO_FFMPEG_PATH absolute path',
+    business_assets: {
+      prompt_center: sha256RuntimeAsset(path.join('prompts', 'prompt_center.json')),
+      prompt_center_ui_seed: sha256RuntimeAsset(path.join('版本测试', 'prompts', 'prompt_center.json')),
+      workflow_n8n02b: sha256RuntimeAsset(path.join('正式导入文件', 'iteration-v1', 'n8n02b.json')),
+      workflow_n8n03: sha256RuntimeAsset(path.join('正式导入文件', 'iteration-v1', 'n8n03.json')),
+      review_asset_service: sha256RuntimeAsset(path.join('版本测试', 'serve-review-assets.mjs')),
+      quality_gate: 'scripts/win/verify-business-assets.mjs',
+    },
     project_root: 'resources/runtime',
     user_data_dir: '%APPDATA%\\AI Video',
     output_dir: '%USERPROFILE%\\Documents\\AI Video Outputs',
