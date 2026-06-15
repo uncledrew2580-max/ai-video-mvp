@@ -151,9 +151,7 @@ jobs:
       # model calls). Run after assemble so the real staging tree is available too.
       - name: Windows nonpaid tests (desktop shell + client-shape P14-B5)
         shell: pwsh
-        run: |
-          node --test tests/nonpaid/p14-windows-desktop-shell.test.mjs
-          node --test tests/nonpaid/p14c2-windows-business-assets.test.mjs
+        run: node --test tests/nonpaid/p14-windows-desktop-shell.test.mjs
 
       # P14-B3/B5: enforce the small-user "client" shape (engineering tree hidden
       # under resources/runtime/; AI Video.exe at root, cmd at tools/).

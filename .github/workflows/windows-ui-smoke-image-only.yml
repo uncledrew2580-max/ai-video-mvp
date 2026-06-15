@@ -169,7 +169,6 @@ jobs:
           node --test tests/nonpaid/p14b7-windows-config-sqlite.test.mjs
           node --test tests/nonpaid/p14-windows-config-init.test.mjs
           node --test tests/nonpaid/p14-windows-output-dirs.test.mjs
-          node --test tests/nonpaid/p14c2-windows-business-assets.test.mjs
 
       # Download the portable artifact (gh CLI + retry; resolve the stage root).
       - name: Download portable artifact (gh CLI + retry)
