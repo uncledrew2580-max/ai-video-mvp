@@ -196,6 +196,16 @@ test('no_paid_full backend writes local artifacts instead of calling paid webhoo
     '/review-submit must return after local video progress artifacts before any real forwardReviewSubmission');
 });
 
+test('no_paid_full active route falls back to recent concept context when project-state mtime races', () => {
+  const src = readServe();
+  const routeFn = src.slice(src.indexOf('function getActiveRoute('), src.indexOf('function getFinalVideoInfoForUi'));
+  assert.ok(routeFn.includes('CONCEPT_CONTEXT_ROOT'), 'getActiveRoute must inspect concept contexts as a fallback');
+  assert.ok(routeFn.includes('minMs - 5000'), 'fallback must allow a small timestamp race tolerance');
+  assert.ok(routeFn.includes('/concepts/item?context='), 'fallback must route directly to the concept detail page');
+  assert.ok(routeFn.indexOf('CONCEPT_CONTEXT_ROOT') < routeFn.indexOf("return '/'"),
+    'fallback must run before returning the waiting/default route');
+});
+
 // ── Full image-only PIPELINE through the UI (Codex P14-B8 review) ─────────────
 
 test('ui-smoke drives the full pipeline: select concept → confirm script → storyboard image', () => {

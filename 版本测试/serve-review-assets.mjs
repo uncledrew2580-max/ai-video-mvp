@@ -3369,7 +3369,30 @@ function getFinalRouteForProject(projectId, reviewFile = '') {
 function getActiveRoute(projectId = '', minMtimeMs = 0) {
   const rawState = projectId ? readProjectState(projectId) : getLatestProjectState(minMtimeMs);
   const activeProjectId = String(rawState.project_id || projectId || '').trim();
-  if (!activeProjectId) return '/';
+  if (!activeProjectId) {
+    // Windows CI and some filesystems can write the concept context at the same
+    // millisecond as the submit timestamp while project-state mtime lands just
+    // outside the strict >= since filter. If the concept context is already
+    // present, route immediately instead of leaving the user on the waiting page.
+    try {
+      const minMs = Number(minMtimeMs || 0);
+      if (minMs > 0 && fs.existsSync(CONCEPT_CONTEXT_ROOT)) {
+        const recent = fs.readdirSync(CONCEPT_CONTEXT_ROOT)
+          .filter((name) => name.endsWith('.json') && !name.includes('.stale'))
+          .map((name) => {
+            const fullPath = path.join(CONCEPT_CONTEXT_ROOT, name);
+            return { name, mtimeMs: fs.statSync(fullPath).mtimeMs };
+          })
+          .filter((entry) => entry.mtimeMs >= minMs - 5000)
+          .sort((a, b) => b.mtimeMs - a.mtimeMs)[0];
+        if (recent?.name) {
+          const ctx = readContextFile(path.join(CONCEPT_CONTEXT_ROOT, recent.name));
+          if (ctx?.project_id) return `/concepts/item?context=${encodeURIComponent(recent.name)}`;
+        }
+      }
+    } catch {}
+    return '/';
+  }
   const latestState = mergeDerivedProjectStateForUi(activeProjectId, rawState);
 
   const conceptFile = getLatestConceptContextFileForProject(activeProjectId);
