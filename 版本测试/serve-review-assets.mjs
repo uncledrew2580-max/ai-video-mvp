@@ -1077,6 +1077,37 @@ function progressSidecarPath(projectId) {
   return path.join(REVIEW_PROGRESS_ROOT, `review_progress_${safeProjectId}.json`);
 }
 
+function pauseSidecarPath(projectId) {
+  const safeProjectId = String(projectId || 'proj').replace(/[^a-zA-Z0-9_-]+/g, '_');
+  return path.join(REVIEW_PROGRESS_ROOT, `review_pause_${safeProjectId}.json`);
+}
+
+function readPauseSidecar(projectId) {
+  const filePath = pauseSidecarPath(projectId);
+  if (!fs.existsSync(filePath)) return { paused: false, pause_path: filePath };
+  const data = readContextFile(filePath);
+  return {
+    ...data,
+    paused: data.paused === true,
+    pause_path: filePath,
+  };
+}
+
+function writePauseSidecar(projectId, paused, extra = {}) {
+  const filePath = pauseSidecarPath(projectId);
+  if (!paused) {
+    try { fs.unlinkSync(filePath); } catch {}
+    return filePath;
+  }
+  fs.writeFileSync(filePath, JSON.stringify({
+    paused: true,
+    project_id: projectId || '',
+    updated_at: new Date().toISOString(),
+    ...extra,
+  }, null, 2));
+  return filePath;
+}
+
 function rerunShotLockPath(projectId, shotId) {
   const safeProjectId = String(projectId || 'proj').replace(/[^a-zA-Z0-9_-]+/g, '_');
   const safeShotId = normalizeShotIdToken(shotId).replace(/[^a-zA-Z0-9_-]+/g, '_') || 'shot';
@@ -4775,7 +4806,8 @@ function renderReviewStatusPage(contextPath) {
   const rawShots = Array.isArray(progress.shots) && progress.shots.length
     ? progress.shots
     : panelPack.map((panel) => ({ shot_id: panel.shot_id || `shot_${panel.shot_order || ''}`, shot_order: panel.shot_order || '', status: 'pending', video_path: '', operation_name: '' }));
-  const rawIsPaused = Boolean(progress.paused || submitted.paused);
+  const pauseFlag = readPauseSidecar(projectId);
+  const rawIsPaused = Boolean(progress.paused || submitted.paused || pauseFlag.paused);
   const executionErrorSummary = executionFailed ? readExecutionErrorSummary(execution.id) : '';
   const isPauseStopError = /项目已暂停|不再提交新视频任务|paused/i.test(executionErrorSummary);
   const hasRealProgress = Array.isArray(rawProgress.shots) && rawProgress.shots.length > 0;
@@ -7947,6 +7979,7 @@ const server = http.createServer(async (req, res) => {
       } else {
         if (formBody.project_id) {
           markDownstreamStale(formBody.project_id, 'video_regenerated', 'final');
+          writePauseSidecar(formBody.project_id, false);
         }
         await forwardReviewSubmission(formBody);
         execution = findLatestExecutionForProject(formBody.project_id);
@@ -8028,6 +8061,7 @@ const server = http.createServer(async (req, res) => {
         return res.end(renderSubmitResultPage({ ok: false, message: _activeCheckF.reason }));
       }
       markDownstreamStale(formBody.project_id, 'video_rerun_failed_shots', 'final');
+      writePauseSidecar(formBody.project_id, false);
       await forwardReviewSubmission(formBody);
       const execution = findLatestExecutionForProject(formBody.project_id);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -8198,6 +8232,7 @@ const server = http.createServer(async (req, res) => {
       if (!isQualityReroll) {
         markDownstreamStale(projectId, 'video_rerun_single_shot', 'final');
       }
+      writePauseSidecar(projectId, false);
       writeRerunShotLock(projectId, shotId, reviewContextPath);
 
       // Persist the submitted/quality_reroll state (incl. previous_video_path) BEFORE forwarding so
@@ -8295,7 +8330,7 @@ const server = http.createServer(async (req, res) => {
       // B-fix: block duplicate paid submissions, but allow a paused project to resume
       // pending shots after the old execution stopped submitting new work.
       const _activeCheck = isVideoGenerationActive(projectId);
-      const _pausedResumeSafe = Boolean(_progChk.paused) && _pendingShots.length > 0 && _activeShots.length === 0;
+      const _pausedResumeSafe = Boolean(_progChk.paused || readPauseSidecar(projectId).paused) && _pendingShots.length > 0 && _activeShots.length === 0;
       if (_activeCheck.active && !_pausedResumeSafe) {
         res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(renderSubmitResultPage({ ok: false, message: _activeCheck.reason }));
@@ -8305,6 +8340,7 @@ const server = http.createServer(async (req, res) => {
         return res.end(renderSubmitResultPage({ ok: false, message: '所有镜头已完成，无需继续生成。如有问题请导出诊断包。' }));
       }
       markDownstreamStale(projectId, 'video_rerun_pending_shots', 'final');
+      writePauseSidecar(projectId, false);
       const progressPath = progressSidecarPath(projectId);
       if (fs.existsSync(progressPath)) {
         const progress = readContextFile(progressPath);
@@ -8393,10 +8429,13 @@ const server = http.createServer(async (req, res) => {
         const progress = readContextFile(progressPath);
         progress.paused = true;
         progress.status = 'paused';
-        progress.running_count = 0;
         progress.updated_at = new Date().toISOString();
         fs.writeFileSync(progressPath, JSON.stringify(progress, null, 2));
       }
+      writePauseSidecar(projectId, true, {
+        review_context_path: reviewContextPath,
+        reason: 'user_paused_video_queue',
+      });
       res.writeHead(303, { Location: `/review-status?context=${encodeURIComponent(path.basename(reviewContextPath))}` });
       return res.end();
     } catch (error) {

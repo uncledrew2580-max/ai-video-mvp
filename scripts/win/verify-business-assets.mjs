@@ -172,7 +172,8 @@ function verifyWf03() {
 
   const summaryCode = getNode(wf, 'Veo结果汇总')?.parameters?.jsCode || '';
   assertIncludes(summaryCode, 'completedCount >= totalPanels', 'WF03 summary paused clear');
-  assertIncludes(summaryCode, 'false : Boolean(progress.paused)', 'WF03 summary paused clear');
+  assertIncludes(summaryCode, 'review_pause_', 'WF03 summary pause sidecar');
+  assertIncludes(summaryCode, 'false : Boolean(progress.paused || _pauseRequested)', 'WF03 summary paused clear');
 }
 
 function verifyServiceGuards() {
@@ -180,6 +181,8 @@ function verifyServiceGuards() {
   for (const needle of [
     'allClipsComplete',
     'rawIsPaused',
+    'pauseSidecarPath',
+    'writePauseSidecar(projectId, true',
     '/review-rerun-pending',
     '_pausedResumeSafe',
     'if (_activeCheck.active && !_pausedResumeSafe)',

@@ -30,6 +30,9 @@ const src = fs.readFileSync(srcFile, 'utf8');
   assert.ok(hasHelper, 'isVideoGenerationActive helper must be defined in serve-review-assets.mjs');
   assert.ok(src.includes('function findActiveExecutionForProject('), 'project lock must query active running/waiting executions, not only latest execution');
   assert.ok(src.includes("e.status IN ('running', 'waiting')"), 'active execution query must filter running/waiting statuses');
+  assert.ok(src.includes('function pauseSidecarPath('), 'pause sidecar path helper must exist');
+  assert.ok(src.includes('function readPauseSidecar('), 'pause sidecar read helper must exist');
+  assert.ok(src.includes('function writePauseSidecar('), 'pause sidecar write helper must exist');
   console.log('PASS [1] isVideoGenerationActive defined');
 }
 
@@ -147,6 +150,49 @@ const src = fs.readFileSync(srcFile, 'utf8');
   assert.ok(code.includes("return status === 'pending' || !status;"), 'rerun_pending_only must process pending shots only');
   assert.ok(code.includes("return status === 'failed';"), 'rerun_failed_only bulk path must process failed shots only');
   console.log('PASS [9] workflow 03 恢复已确认分镜 has shot idempotency filter (D-fix)');
+}
+
+// ── Test 9b: pause sidecar blocks paid Veo submission in packaged workflows ───
+{
+  for (const rel of [
+    ['正式导入文件', 'iteration-v1', 'n8n03.json'],
+    ['版本测试', '正式导入文件', '03-续跑-分镜审核到视频.fixed-basectx.json'],
+  ]) {
+    const wfPath = path.join(__dirname, '..', '..', ...rel);
+    const wf = JSON.parse(fs.readFileSync(wfPath, 'utf8'));
+    const startNode = wf.nodes.find(n => n.name === 'Veo进度_开始分镜');
+    const submitNode = wf.nodes.find(n => n.name === '逐镜视频_API_占位');
+    const submittedNode = wf.nodes.find(n => n.name === 'Veo进度_已提交任务');
+    const summaryNode = wf.nodes.find(n => n.name === 'Veo结果汇总');
+    for (const node of [startNode, submitNode, submittedNode, summaryNode]) {
+      assert.ok(node, `${rel.join('/')} must contain ${node?.name || 'required pause node'}`);
+      const code = node.parameters?.jsCode || '';
+      assert.ok(code.includes('review_pause_'), `${node.name} must read/write review_pause_ sidecar`);
+      assert.ok(code.includes('_readVideoPause'), `${node.name} must call sidecar pause reader`);
+      const helperStart = code.indexOf('function _readVideoPause');
+      const helperEnd = code.indexOf('function _markVideoPaused', helperStart);
+      if (helperStart >= 0 && helperEnd > helperStart) {
+        const helperCode = code.slice(helperStart, helperEnd);
+        assert.ok(!helperCode.includes('return [];'), `${node.name} pause reader must not stop workflow from inside helper`);
+        assert.ok(!helperCode.includes('_pauseRequested'), `${node.name} pause reader must not recurse into pause state calculation`);
+        assert.ok(!helperCode.includes('items[0].json?.project_id'), `${node.name} pause reader must not depend on batch item scope`);
+        assert.ok(!helperCode.includes('row.project_id'), `${node.name} pause reader must not depend on row scope`);
+      }
+    }
+    const submitCode = submitNode.parameters?.jsCode || '';
+    assert.ok(submitCode.includes('P17-C7 pause sidecar guard'), 'paid submit node must guard before upload/submit');
+    assert.ok(submitCode.indexOf('P17-C7 pause sidecar guard') < submitCode.indexOf('Kie首帧图上传') || submitCode.indexOf('P17-C7 pause sidecar guard') < submitCode.indexOf('ModelHub视频提交'),
+      'pause guard must appear before paid provider submission');
+  }
+  const pauseIdx = src.indexOf("req.url === '/review-pause-project'");
+  assert.ok(pauseIdx > 0, '/review-pause-project route must exist');
+  const pauseBlock = src.slice(pauseIdx, pauseIdx + 1400);
+  assert.ok(pauseBlock.includes('writePauseSidecar(projectId, true'), 'pause route must persist independent pause sidecar');
+  const resumeIdx = src.indexOf("req.url === '/review-rerun-pending'");
+  const resumeBlock = src.slice(resumeIdx, resumeIdx + 2600);
+  assert.ok(resumeBlock.includes('readPauseSidecar(projectId).paused'), 'continue-pending route must recognize sidecar paused state');
+  assert.ok(resumeBlock.includes('writePauseSidecar(projectId, false'), 'continue-pending route must clear sidecar before resuming');
+  console.log('PASS [9b] pause sidecar blocks paid Veo submissions and resumes safely');
 }
 
 // ── Test 10: workflow 03 Veo结果汇总 has E-fix ───────────────────────────────

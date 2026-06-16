@@ -1,7 +1,7 @@
 {
   "_meta": {
     "version": "v1.0",
-    "updated_at": "2026-04-29",
+    "updated_at": "2026-06-16",
     "description": "创作任务类型硬约束映射。除非 creative_task_type 为空或显式为自动判断，否则后续所有阶段必须优先服从这里的规则。"
   },
   "种草口播": {
@@ -29,29 +29,36 @@
     "recommended_grid": "6_grid"
   },
   "开箱展示": {
-    "video_type": "pure_display_or_light_voiceover",
-    "style": "real unboxing showcase",
+    "video_type": "unboxing_showcase",
+    "style": "TikTok UGC unboxing — packaging truth, first-look curiosity, tactile product reveal, clear identity from uploaded images",
     "script_focus": [
-      "package",
-      "opening action",
-      "first impression",
-      "product reveal",
-      "detail display"
+      "package/opening curiosity hook in first 1-2 seconds",
+      "one simple unpacking action per shot",
+      "packaging and product identity must match uploaded images; no invented box, accessories, or labels",
+      "first full reveal, hand-held texture/detail, real placement/use scene, first impression",
+      "each 8-second clip must end with a stable product-readable frame"
     ],
-    "voiceover_required": false,
+    "voiceover_required": "optional",
     "visual_focus": [
-      "hands",
-      "packaging",
-      "product reveal",
-      "first look",
-      "detail close-up"
+      "hands, package, product reveal, tactile detail, first-use placement",
+      "natural tabletop/bedroom/living-room/kitchen/desk scene chosen by product logic",
+      "casual creator excitement, not luxury commercial unboxing"
     ],
     "avoid": [
-      "too much talking",
-      "fake luxury commercial",
-      "over-polished setup"
+      "inventing packaging, inserts, accessories, labels, text, or brand marks not visible in references",
+      "too many unboxing steps inside one shot",
+      "slow ASMR filler without product progress",
+      "product-only glamour shot before reveal sequence makes sense"
     ],
-    "recommended_grid": "6_grid"
+    "recommended_grid": "6_grid",
+    "script_structure": {
+      "shot_1": "Unboxing hook — package or product partially visible, curiosity starts immediately",
+      "shot_2": "Opening action — one simple peel/open/lift action, no complex hand choreography",
+      "shot_3": "First full reveal — product appears complete and clear, exact identity locked to reference",
+      "shot_4": "Tactile detail — hand-held material/finish/structure close-up, no random text",
+      "shot_5": "First placement/use — product placed or lightly used in real scene",
+      "shot_6": "First impression — creator-style reaction or natural recommendation with product visible"
+    }
   },
   "沉浸式开箱": {
     "video_type": "pure_display",
@@ -80,28 +87,40 @@
     "recommended_grid": "6_grid"
   },
   "产品卖点展示": {
-    "video_type": "mixed",
-    "style": "product benefit demonstration",
+    "video_type": "product_display_showcase",
+    "style": "TikTok UGC product showcase — visual proof, clear product identity, one selling point per clip, not slow catalog display",
     "script_focus": [
-      "core selling points",
-      "usage demo",
-      "detail close-up",
-      "result",
-      "soft CTA"
+      "strong result, visual surprise, or product-in-use hook in the first 1-2 seconds",
+      "complete product reveal with exact identity from uploaded primary reference",
+      "one feature/proof per shot, not feature dumping",
+      "real usage scene and simple low-risk action",
+      "effect/result proof and soft recommendation",
+      "each 8-second clip has hook/action/stable ending so it can be mixed independently"
     ],
     "voiceover_required": "optional",
     "visual_focus": [
-      "before-after",
-      "feature demo",
-      "detail proof",
-      "result scene"
+      "product complete and readable when it is the subject",
+      "clear structure/material/detail proof",
+      "single realistic use action",
+      "before/result states split across shots, no split-screen inside one panel",
+      "natural local UGC setting"
     ],
     "avoid": [
-      "empty concept",
-      "no product proof",
-      "unrealistic effect claim"
+      "slow empty product beauty shots",
+      "overly cinematic advertising",
+      "invented functions or unsupported claims",
+      "complex multi-step operation in one shot",
+      "product morphing or color/material drift"
     ],
-    "recommended_grid": "6_grid"
+    "recommended_grid": "6_grid",
+    "script_structure": {
+      "shot_1": "Thumb-stop hook — strong visual result, use moment, or curiosity trigger related to the product",
+      "shot_2": "Product reveal — full product appears clearly as the subject, exact identity locked to reference images",
+      "shot_3": "Core detail/proof — one structure, material, mechanism, texture, or key selling-point proof",
+      "shot_4": "Real use — one simple action in a natural target-market scene",
+      "shot_5": "Result/evidence — visible outcome, improvement, or proof state, no split-screen inside one panel",
+      "shot_6": "Soft recommendation — natural creator-style reason to buy/save/use, product clearly visible"
+    }
   },
   "故事剧情带货": {
     "video_type": "story_drama",
@@ -226,6 +245,190 @@
       "shot_4": "关键使用过程/戏剧性转折 — 产品使用一个动作，效果开始显现，情绪开始反转",
       "shot_5": "结果呈现/情绪释放 — 问题解决后的满意/惊喜状态，真实可信的情绪反应",
       "shot_6": "轻 CTA/真实推荐/评论区互动 — 自然收尾，不硬销售"
+    },
+    "recommended_grid": "6_grid"
+  },
+  "OOTD穿搭展示": {
+    "video_type": "style_showcase_ootd",
+    "style": "TikTok OOTD / outfit check / style showcase UGC — style-first, model-worn, same outfit continuity, not pain-point education unless explicitly requested",
+    "script_focus": [
+      "style reveal hook",
+      "full-body outfit check",
+      "fit and silhouette",
+      "on-body detail",
+      "lifestyle styling scene",
+      "same model and same outfit continuity",
+      "soft style reason"
+    ],
+    "voiceover_required": "optional",
+    "visual_focus": [
+      "same model wearing product",
+      "full-body and three-quarter outfit framing",
+      "on-body detail close-up",
+      "natural lifestyle movement",
+      "relaxed confident facial expression"
+    ],
+    "avoid": [
+      "pain-point/problem-solution hook unless explicitly requested",
+      "hanger-only/rack-only/flat-lay-only main shot",
+      "switching models/faces/body proportions/outfits",
+      "product education or e-commerce detail-page tone",
+      "garment redesign, color change, hemline/cut/material change"
+    ],
+    "script_structure": {
+      "shot_1": "Outfit reveal hook — full-body or mirror fit check, style-first, no pain-point setup",
+      "shot_2": "Fit and silhouette — same model, same garment, simple walk/pause/side angle",
+      "shot_3": "On-body detail — neckline/waist/hem/fabric detail while worn, no hanger-only shot",
+      "shot_4": "Lifestyle styling — same model and outfit in coherent daily scene",
+      "shot_5": "Movement/social proof — natural motion or alternate angle showing confidence and comfort",
+      "shot_6": "Soft style reason — natural creator-style close with outfit clearly visible"
+    },
+    "recommended_grid": "6_grid"
+  },
+  "穿搭展示": {
+    "video_type": "style_showcase_ootd",
+    "style": "TikTok OOTD / outfit check / style showcase UGC — style-first, model-worn, same outfit continuity, not pain-point education unless explicitly requested",
+    "script_focus": [
+      "style reveal hook",
+      "full-body outfit check",
+      "fit and silhouette",
+      "on-body detail",
+      "lifestyle styling scene",
+      "same model and same outfit continuity",
+      "soft style reason"
+    ],
+    "voiceover_required": "optional",
+    "visual_focus": [
+      "same model wearing product",
+      "full-body and three-quarter outfit framing",
+      "on-body detail close-up",
+      "natural lifestyle movement",
+      "relaxed confident facial expression"
+    ],
+    "avoid": [
+      "pain-point/problem-solution hook unless explicitly requested",
+      "hanger-only/rack-only/flat-lay-only main shot",
+      "switching models/faces/body proportions/outfits",
+      "product education or e-commerce detail-page tone",
+      "garment redesign, color change, hemline/cut/material change"
+    ],
+    "script_structure": {
+      "shot_1": "Outfit reveal hook — full-body or mirror fit check, style-first, no pain-point setup",
+      "shot_2": "Fit and silhouette — same model, same garment, simple walk/pause/side angle",
+      "shot_3": "On-body detail — neckline/waist/hem/fabric detail while worn, no hanger-only shot",
+      "shot_4": "Lifestyle styling — same model and outfit in coherent daily scene",
+      "shot_5": "Movement/social proof — natural motion or alternate angle showing confidence and comfort",
+      "shot_6": "Soft style reason — natural creator-style close with outfit clearly visible"
+    },
+    "recommended_grid": "6_grid"
+  },
+  "风格展示": {
+    "video_type": "style_showcase_ootd",
+    "style": "TikTok OOTD / outfit check / style showcase UGC — style-first, model-worn, same outfit continuity, not pain-point education unless explicitly requested",
+    "script_focus": [
+      "style reveal hook",
+      "full-body outfit check",
+      "fit and silhouette",
+      "on-body detail",
+      "lifestyle styling scene",
+      "same model and same outfit continuity",
+      "soft style reason"
+    ],
+    "voiceover_required": "optional",
+    "visual_focus": [
+      "same model wearing product",
+      "full-body and three-quarter outfit framing",
+      "on-body detail close-up",
+      "natural lifestyle movement",
+      "relaxed confident facial expression"
+    ],
+    "avoid": [
+      "pain-point/problem-solution hook unless explicitly requested",
+      "hanger-only/rack-only/flat-lay-only main shot",
+      "switching models/faces/body proportions/outfits",
+      "product education or e-commerce detail-page tone",
+      "garment redesign, color change, hemline/cut/material change"
+    ],
+    "script_structure": {
+      "shot_1": "Outfit reveal hook — full-body or mirror fit check, style-first, no pain-point setup",
+      "shot_2": "Fit and silhouette — same model, same garment, simple walk/pause/side angle",
+      "shot_3": "On-body detail — neckline/waist/hem/fabric detail while worn, no hanger-only shot",
+      "shot_4": "Lifestyle styling — same model and outfit in coherent daily scene",
+      "shot_5": "Movement/social proof — natural motion or alternate angle showing confidence and comfort",
+      "shot_6": "Soft style reason — natural creator-style close with outfit clearly visible"
+    },
+    "recommended_grid": "6_grid"
+  },
+  "上身试穿展示": {
+    "video_type": "style_showcase_ootd",
+    "style": "TikTok OOTD / outfit check / style showcase UGC — style-first, model-worn, same outfit continuity, not pain-point education unless explicitly requested",
+    "script_focus": [
+      "style reveal hook",
+      "full-body outfit check",
+      "fit and silhouette",
+      "on-body detail",
+      "lifestyle styling scene",
+      "same model and same outfit continuity",
+      "soft style reason"
+    ],
+    "voiceover_required": "optional",
+    "visual_focus": [
+      "same model wearing product",
+      "full-body and three-quarter outfit framing",
+      "on-body detail close-up",
+      "natural lifestyle movement",
+      "relaxed confident facial expression"
+    ],
+    "avoid": [
+      "pain-point/problem-solution hook unless explicitly requested",
+      "hanger-only/rack-only/flat-lay-only main shot",
+      "switching models/faces/body proportions/outfits",
+      "product education or e-commerce detail-page tone",
+      "garment redesign, color change, hemline/cut/material change"
+    ],
+    "script_structure": {
+      "shot_1": "Outfit reveal hook — full-body or mirror fit check, style-first, no pain-point setup",
+      "shot_2": "Fit and silhouette — same model, same garment, simple walk/pause/side angle",
+      "shot_3": "On-body detail — neckline/waist/hem/fabric detail while worn, no hanger-only shot",
+      "shot_4": "Lifestyle styling — same model and outfit in coherent daily scene",
+      "shot_5": "Movement/social proof — natural motion or alternate angle showing confidence and comfort",
+      "shot_6": "Soft style reason — natural creator-style close with outfit clearly visible"
+    },
+    "recommended_grid": "6_grid"
+  },
+  "服装产品展示": {
+    "video_type": "apparel_product_display",
+    "style": "TikTok UGC apparel product showcase — product-display first, model-worn when useful, same garment identity, not pain-point education unless explicitly requested",
+    "script_focus": [
+      "first-frame full worn-product hook or clean product-in-use reveal",
+      "fit, cut, silhouette, material, drape, opacity, neckline, waistline, hemline, and styling proof",
+      "show the product as a garment people can understand quickly, not as a catalog still life",
+      "same garment SKU from primary product reference across all shots",
+      "each 8-second clip must have a first 1-2s hook, one middle action/proof, and a stable ending frame"
+    ],
+    "voiceover_required": "optional",
+    "visual_focus": [
+      "complete worn look or clean full-product view as the visual anchor",
+      "front/side/three-quarter views for fit and silhouette",
+      "on-body or hand-held details that preserve the exact garment identity",
+      "natural lifestyle scene suitable for the target market",
+      "confident relaxed expression and believable creator body language"
+    ],
+    "avoid": [
+      "pain-point/problem-solution framing unless explicitly selected",
+      "hanger-only or flat-lay-only sequence as the main video structure",
+      "switching models/faces/body proportions/outfits between shots",
+      "garment cut, length, neckline, waistline, color, material, opacity, or hemline drift",
+      "slow empty posing without product information",
+      "catalog/e-commerce detail-page tone"
+    ],
+    "script_structure": {
+      "shot_1": "Visual hook — complete worn look or clean full-product reveal; viewer instantly understands style and product identity",
+      "shot_2": "Fit/silhouette — front/side/three-quarter view showing cut, waistline, length, drape, or body proportion effect",
+      "shot_3": "Detail proof — on-body or hand-held detail of fabric, neckline, hem, stitching, texture, opacity, or finish",
+      "shot_4": "Real-life styling/use scene — same product in a believable target-market environment",
+      "shot_5": "Motion/proof — light walk, sit/stand, turn, stretch, or angle change proving stability, comfort, or visual appeal",
+      "shot_6": "Soft recommendation — clear product visibility and one natural reason to save/buy/style it"
     },
     "recommended_grid": "6_grid"
   }

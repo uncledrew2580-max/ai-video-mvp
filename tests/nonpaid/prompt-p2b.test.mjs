@@ -384,6 +384,126 @@ function assertBoth(label, fn) {
   console.log('PASS [16] product-reference handoff: all uploaded images + primary identity');
 }
 
+// ═══ [17] OOTD / style-showcase route does not fall back to pain-point ads ══
+{
+  assertBoth('17 prompts', (pc, file) => {
+    const mapping = pc.creative_task_type_mapping || {};
+    for (const key of ['OOTD穿搭展示', '穿搭展示', '风格展示', '上身试穿展示']) {
+      assert.equal(mapping[key]?.video_type, 'style_showcase_ootd',
+        `${file}: ${key} must route to style_showcase_ootd`);
+    }
+
+    assert.ok(pc.director.system_instruction.includes('创作任务类型路由覆盖 — OOTD/穿搭/风格展示'),
+      `${file}: director must include OOTD route override`);
+    assert.ok(pc.director.user_template.includes('不得把痛点暴击') ||
+              pc.director.user_template.includes('不得把“痛点教育”'),
+      `${file}: director user prompt must prevent OOTD from becoming pain education`);
+
+    assert.ok(pc.script.system_instruction.includes('style_showcase_ootd'),
+      `${file}: script system must include style_showcase_ootd route`);
+    assert.ok(pc.script.system_instruction.includes('不得强行写痛点'),
+      `${file}: script system must forbid forced pain-point framing for OOTD`);
+    assert.ok(pc.script.user_template.includes('shot_1 穿搭第一眼 Hook'),
+      `${file}: script user prompt must define the OOTD 6-shot progression`);
+
+    assert.ok(pc.storyboard.system_instruction.includes('OOTD 首帧任务矩阵'),
+      `${file}: storyboard must include OOTD panel matrix`);
+    assert.ok(pc.storyboard.system_instruction.includes('不得使用痛点/解决方案矩阵'),
+      `${file}: storyboard must prevent OOTD from using the pain/solution matrix`);
+    assert.ok(pc.storyboard.user_template.includes('same model, same face, same hairstyle'),
+      `${file}: storyboard user prompt must enforce same-model outfit continuity`);
+
+    const ootdVeo = pc.veo_quality_constraints?.execution_layer?.ootd_style_showcase || '';
+    assert.ok(ootdVeo.includes('style-first outfit content'),
+      `${file}: Veo execution layer must include OOTD style-first rule`);
+    assert.ok(ootdVeo.includes('no hanger-only shot'),
+      `${file}: Veo execution layer must forbid hanger-only OOTD drift`);
+  });
+
+  const wf01 = loadWf(N8N01);
+  const directorReq = wfNodeCode(wf01, '导演请求体组装');
+  const conceptExtract = wfNodeCode(wf01, '创意方向提取');
+  assert.ok(directorReq.includes('resolveCreativeTaskTypeRules') &&
+            directorReq.includes('OOTD穿搭展示') &&
+            directorReq.includes('fit\\s*check'),
+    'WF01 director request must fuzzy-route freeform OOTD/fit-check creative_task_type');
+  assert.ok(conceptExtract.includes('resolveCreativeTaskTypeRules') &&
+            conceptExtract.includes('OOTD穿搭展示') &&
+            conceptExtract.includes('穿搭'),
+    'WF01 concept extraction must persist resolved OOTD type rules');
+
+  const wf02b = loadWf(N8N02B);
+  const cropCode = wfNodeCode(wf02b, '六宫格裁切_9x16');
+  assert.ok(cropCode.includes('isOotdShowcase'), 'WF02B videoPrompt must detect OOTD route');
+  assert.ok(cropCode.includes('OOTD execution rule:'), 'WF02B videoPrompt must inject OOTD execution rule');
+  assert.ok(cropCode.includes('Shot type — OOTD Hook'), 'WF02B Hook prompt must be OOTD-aware');
+  assert.ok(cropCode.includes('no hanger-only shot'), 'WF02B hardAvoid must include hanger-only OOTD guard');
+  console.log('PASS [17] OOTD/style-showcase route protected across prompts + runtime assembly');
+}
+
+// ═══ [18] Universal creative routes + 8-second clip protocol ════════════════
+{
+  assertBoth('18 prompts', (pc, file) => {
+    const raw = compact(pc);
+    assert.equal(pc._version, '1.1.2', `${file}: prompt version must advance to 1.1.2`);
+
+    assert.ok(raw.includes('四次模型调用底层协议'),
+      `${file}: global model-call protocol must be present`);
+    assert.ok(raw.includes('通用创作类型路由'),
+      `${file}: universal creative route table must be present`);
+    assert.ok(raw.includes('8 秒 Clip 脚本执行协议'),
+      `${file}: script must define per-shot 8-second clip protocol`);
+    assert.ok(raw.includes('分镜首帧 = 8 秒 Clip 第一帧'),
+      `${file}: storyboard must define each panel as a Veo first frame`);
+    assert.ok(raw.includes('Route-aware 8-second clip requirements'),
+      `${file}: Nano wrapper must carry route-aware 8-second requirements`);
+
+    const mapping = pc.creative_task_type_mapping || {};
+    assert.equal(mapping['服装产品展示']?.video_type, 'apparel_product_display',
+      `${file}: apparel product display route must exist`);
+    assert.equal(mapping['产品展示']?.video_type, 'product_display_showcase',
+      `${file}: product display route must be explicit`);
+    assert.equal(mapping['开箱']?.video_type, 'unboxing_showcase',
+      `${file}: unboxing route must be explicit`);
+
+    const scriptText = pc.script.system_instruction + pc.script.user_template;
+    for (const token of ['前 1-2 秒', '中段 3-6 秒', '末段 7-8 秒',
+                         '服装产品展示', '普通产品展示', '开箱']) {
+      assert.ok(scriptText.includes(token), `${file}: script prompt must include "${token}"`);
+    }
+
+    const el = pc.veo_quality_constraints?.execution_layer || {};
+    for (const key of ['clip_8s_structure', 'product_display_showcase',
+                       'apparel_product_display', 'unboxing_showcase',
+                       'pain_point_showcase']) {
+      assert.ok(el[key], `${file}: Veo execution_layer.${key} must exist`);
+    }
+    assert.ok(el.clip_8s_structure.includes('first 1-2 seconds') &&
+              el.clip_8s_structure.includes('middle 3-6 seconds') &&
+              el.clip_8s_structure.includes('last 7-8 seconds'),
+      `${file}: clip_8s_structure must define the three-part 8s pacing`);
+  });
+
+  const wf02b = loadWf(N8N02B);
+  const cropCode = wfNodeCode(wf02b, '六宫格裁切_9x16');
+  for (const token of ['isProductDisplayShowcase', 'isApparelProductDisplay',
+                       'isUnboxingShowcase', '_execClip8',
+                       '8-second clip execution rule:',
+                       'Product-display route:', 'Apparel product-display route:',
+                       'Unboxing route:']) {
+    assert.ok(cropCode.includes(token), `WF02B video prompt assembly must include ${token}`);
+  }
+
+  for (const wfPath of [N8N01, N8N02A, N8N02B]) {
+    const wf = loadWf(wfPath);
+    const promptLib = wfNodeCode(wf, 'Prompt Library');
+    assert.ok(promptLib.includes('服装产品展示') &&
+              promptLib.includes('apparel_product_display'),
+      `${path.relative(ROOT, wfPath)} Prompt Library fallback must include apparel product display route`);
+  }
+  console.log('PASS [18] universal routes + 8-second clip protocol protected');
+}
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log('');
-console.log('prompt-p2b nonpaid tests: ALL PASS (16/16)');
+console.log('prompt-p2b nonpaid tests: ALL PASS (18/18)');

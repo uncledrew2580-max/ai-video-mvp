@@ -25,6 +25,7 @@ const include = [
   'scripts',
   'docs/CLIENT_PACKAGING_PLAN.md',
   'docs/tiktok_ai_video_workflow_usage.md',
+  'lib',
   'gemini-generate.mjs',
   'veo-download.mjs',
   'veo-sdk-submit.mjs',

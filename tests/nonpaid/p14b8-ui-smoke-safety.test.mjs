@@ -885,6 +885,8 @@ test('B8R1: image-only default + dispatch-only trigger are preserved', () => {
 
 const WIN_MAIN = path.join(ROOT, 'desktop', 'win-main.cjs');
 const ASSEMBLE = path.join(ROOT, 'scripts', 'win', 'assemble-windows-portable.mjs');
+const MAC_APP_PACKAGER = path.join(ROOT, 'scripts', 'package-ai-video-mac-app.mjs');
+const MAC_MVP_PACKAGER = path.join(ROOT, 'scripts', 'package-mac-mvp.mjs');
 const readWinMain = () => fs.readFileSync(WIN_MAIN, 'utf8');
 
 test('B8T: win-main injects a config-save handler on did-finish-load (proven execution path)', () => {
@@ -955,6 +957,13 @@ test('B8T: assemble packages win-main.cjs + serve so source and artifact cannot 
   // The desktop shell entry and the 版本测试 server are part of the packaged tree.
   assert.ok(/版本测试/.test(asm), 'assemble must include the 版本测试 server tree');
   assert.ok(fs.existsSync(WIN_MAIN), 'win-main.cjs (desktop shell) must exist for packaging');
+});
+
+test('B8T: Mac packagers include the shared root lib runtime', () => {
+  for (const packager of [MAC_APP_PACKAGER, MAC_MVP_PACKAGER]) {
+    const src = readSrc(packager);
+    assert.ok(/['"]lib['"]/.test(src), `${path.basename(packager)} must package root lib/`);
+  }
 });
 
 test('B8T: the smoke detects the handler via marker/data-bound-save/window + records the method', () => {

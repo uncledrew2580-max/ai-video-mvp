@@ -44,6 +44,7 @@ const include = [
   'desktop',
   'docs/CLIENT_PACKAGING_PLAN.md',
   // docs/tiktok_ai_video_workflow_usage.md excluded: contains build-machine absolute paths
+  'lib',
   'node_modules',
   'prompts',
   'runtime',
@@ -106,11 +107,10 @@ function filter(src) {
   if (src.includes('/node_modules/@sentry-internal/node-native-stacktrace/')) return false;
   if (src.endsWith('/node_modules/@sentry-internal/node-native-stacktrace')) return false;
 
-  // n8n 2.x expects @n8n/api-types and n8n-workflow to share one zod
-  // instance. Duplicated nested zod copies can break module startup in the
-  // packaged runtime with discriminatedUnion errors.
-  if (src.includes('/node_modules/@n8n/api-types/node_modules/zod')) return false;
-  if (src.includes('/node_modules/n8n-workflow/node_modules/zod')) return false;
+  // n8n 2.x expects one shared zod instance. Any nested */node_modules/zod can
+  // break module extraction at startup and surface as a misleading missing
+  // breaking-changes.ee module. Keep only the top-level node_modules/zod.
+  if (/\/node_modules\/.+\/node_modules\/zod(?:\/|$)/.test(src)) return false;
 
   return true;
 }
