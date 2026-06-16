@@ -184,6 +184,41 @@ test('launcher passes the same CONFIG_PATH to n8n and the UI server', () => {
     `launcher must forward AI_VIDEO_CONFIG_PATH: CONFIG_PATH to both n8n and UI (found ${occurrences})`);
 });
 
+test('launcher prepends bundled runtime/bin to child PATH with the platform delimiter', () => {
+  const src = fs.readFileSync(LAUNCHER, 'utf8');
+  assert.ok(/import \{ join, dirname, delimiter \} from 'node:path'/.test(src),
+    'launcher must import path.delimiter for cross-platform PATH assembly');
+  assert.ok(src.includes("const RUNTIME_BIN_DIR = join(PROJECT_ROOT, 'runtime', 'bin')"),
+    'launcher must resolve the bundled runtime/bin directory');
+  assert.ok(src.includes('function withPrependedPath'),
+    'launcher must centralize safe PATH construction');
+  assert.ok(src.includes('join(delimiter)'),
+    'launcher PATH must use path.delimiter, not a hard-coded separator');
+  assert.ok(!src.includes(".join(':')"),
+    'launcher must not use POSIX ":" PATH separator on Windows');
+  const expectedEntries = '[RUNTIME_BIN_DIR, dirname(process.execPath), PROJECT_BIN_DIR]';
+  assert.equal((src.match(new RegExp(expectedEntries.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g')) || []).length, 2,
+    'launcher must prepend bundled node paths for both n8n and UI child processes');
+});
+
+test('win-main.cjs prepends bundled node.exe directory before launching the backend', () => {
+  const src = fs.readFileSync(WIN_MAIN, 'utf8');
+  assert.ok(src.includes('const NODE_BIN_DIR = path.dirname(NODE_EXE)'),
+    'win-main.cjs must derive the bundled node.exe directory');
+  assert.ok(src.includes('function withPrependedPath'),
+    'win-main.cjs must centralize safe PATH construction');
+  assert.ok(src.includes('path.delimiter'),
+    'win-main.cjs PATH must use path.delimiter');
+  assert.ok(src.includes('}, [NODE_BIN_DIR, path.join(PROJECT_ROOT, '),
+    'win-main.cjs must prepend the bundled node/bin paths to the launcher env');
+});
+
+test('cmd/debug launchers put bundled runtime/bin on PATH before starting launcher', () => {
+  const src = fs.readFileSync(ASSEMBLE, 'utf8');
+  assert.ok(/set "PATH=%RUNTIME_DIR%\\\\runtime\\\\bin;%RUNTIME_DIR%\\\\bin;%PATH%"/.test(src),
+    'cmd-mode ENV_BLOCK must expose bundled node.exe to n8n task runners');
+});
+
 // ── D. API key save/reload reports configured without leaking the key ─────────
 
 test('config save/reload reports configured=true and never echoes the key', () => {

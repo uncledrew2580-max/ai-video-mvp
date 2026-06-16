@@ -15,6 +15,7 @@ const UI_URL = `http://127.0.0.1:${UI_PORT}/`;
 // __dirname = resources/app/  →  runtime is resources/runtime/
 const PROJECT_ROOT = path.resolve(__dirname, '..', 'runtime');
 const NODE_EXE = path.join(PROJECT_ROOT, 'runtime', 'bin', 'node.exe');
+const NODE_BIN_DIR = path.dirname(NODE_EXE);
 const LAUNCHER = path.join(PROJECT_ROOT, 'client', 'launcher.mjs');
 const FFMPEG_EXE = path.join(PROJECT_ROOT, 'runtime', 'bin', 'ffmpeg.exe');
 
@@ -71,6 +72,21 @@ if (!gotSingleInstanceLock) {
 
 function logDir() {
   return path.join(app.getPath('appData'), 'AI Video', 'logs', 'launcher');
+}
+
+function envPathKey(env = process.env) {
+  return Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'Path';
+}
+
+function withPrependedPath(baseEnv, entries) {
+  const pathKey = envPathKey(baseEnv);
+  const env = { ...baseEnv };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'path' && key !== pathKey) delete env[key];
+  }
+  const currentPath = baseEnv[pathKey] || baseEnv.Path || baseEnv.PATH || '';
+  env[pathKey] = [...entries, currentPath].filter(Boolean).join(path.delimiter);
+  return env;
 }
 
 function httpOk(url, timeoutMs = 2500) {
@@ -259,7 +275,7 @@ function startLauncher() {
   const layout = userDataLayout();
   ensureUserDataDirs(layout);
 
-  const env = {
+  const env = withPrependedPath({
     ...process.env,
     AI_VIDEO_NO_BROWSER: '1',
     AI_VIDEO_APP_MODE: '1',
@@ -277,7 +293,7 @@ function startLauncher() {
     AI_VIDEO_RUNTIME_ROOT: layout.runtimeRoot,
     WORKFLOW_DATA_ROOT: layout.workflowDataRoot,
     N8N_USER_FOLDER: layout.n8nUserFolder,
-  };
+  }, [NODE_BIN_DIR, path.join(PROJECT_ROOT, 'bin')]);
 
   launcherProcess = spawn(NODE_EXE, [LAUNCHER, '--no-browser'], {
     cwd: PROJECT_ROOT,

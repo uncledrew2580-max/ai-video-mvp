@@ -225,6 +225,7 @@ const crlf = (s) => s.replace(/\r?\n/g, '\r\n');
 // (absolute path), never PATH ffmpeg.
 const ENV_BLOCK = `set "NODE_EXE=%RUNTIME_DIR%\\runtime\\bin\\node.exe"
 set "LAUNCHER=%RUNTIME_DIR%\\client\\launcher.mjs"
+set "PATH=%RUNTIME_DIR%\\runtime\\bin;%RUNTIME_DIR%\\bin;%PATH%"
 set "AI_VIDEO_HOME=%APPDATA%\\AI Video"
 set "AI_VIDEO_FFMPEG_PATH=%RUNTIME_DIR%\\runtime\\bin\\ffmpeg.exe"
 set "AI_VIDEO_RUNTIME_ROOT=%AI_VIDEO_HOME%"

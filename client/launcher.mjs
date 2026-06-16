@@ -7,7 +7,7 @@
 import { spawn, execSync, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, createWriteStream, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, delimiter } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import net from 'node:net';
 import http from 'node:http';
@@ -58,6 +58,8 @@ const CONFIG_PATH = process.env.AI_VIDEO_CONFIG_PATH || (_IS_DIST
 // bare `ffmpeg` from PATH (a clean Mac has none). Prefer an explicit override,
 // then the binary shipped inside the app at <PROJECT_ROOT>/runtime/bin/ffmpeg.
 const FFMPEG_PATH = process.env.AI_VIDEO_FFMPEG_PATH || join(PROJECT_ROOT, 'runtime', 'bin', 'ffmpeg');
+const RUNTIME_BIN_DIR = join(PROJECT_ROOT, 'runtime', 'bin');
+const PROJECT_BIN_DIR = join(PROJECT_ROOT, 'bin');
 
 const N8N_PORT = Number(process.env.N8N_PORT || 5678);
 const N8N_RUNNERS_BROKER_PORT = Number(process.env.N8N_RUNNERS_BROKER_PORT || N8N_PORT + 1);
@@ -78,6 +80,21 @@ function ts() {
 function log(msg)  { console.log(`[${ts()}] ${msg}`); }
 function warn(msg) { console.warn(`[${ts()}] ⚠️  ${msg}`); }
 function fail(msg) { console.error(`[${ts()}] ❌ ${msg}`); }
+
+function envPathKey(env = process.env) {
+  return Object.keys(env).find((key) => key.toLowerCase() === 'path') || 'PATH';
+}
+
+function withPrependedPath(baseEnv, entries) {
+  const pathKey = envPathKey(baseEnv);
+  const env = { ...baseEnv };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'path' && key !== pathKey) delete env[key];
+  }
+  const currentPath = baseEnv[pathKey] || baseEnv.PATH || baseEnv.Path || '';
+  env[pathKey] = [...entries, currentPath].filter(Boolean).join(delimiter);
+  return env;
+}
 
 /** 检查端口是否有服务在监听。返回 'free' 或 'busy' */
 function checkPort(port) {
@@ -371,9 +388,8 @@ async function startN8n(n8nBin, children, options = {}) {
     : { command: n8nBin, args: ['start'] };
 
   const n8nProc = spawn(n8nCommand.command, n8nCommand.args, {
-    env: {
+    env: withPrependedPath({
       ...process.env,
-      PATH: [join(PROJECT_ROOT, 'bin'), process.env.PATH || ''].filter(Boolean).join(':'),
       N8N_USER_FOLDER,
       N8N_PORT: String(N8N_PORT),
       N8N_HOST: '127.0.0.1',
@@ -392,7 +408,7 @@ async function startN8n(n8nBin, children, options = {}) {
       AI_VIDEO_CONFIG_PATH: CONFIG_PATH,
       AI_VIDEO_FFMPEG_PATH: FFMPEG_PATH,
       N8N_DISABLE_UI: 'true',
-    },
+    }, [RUNTIME_BIN_DIR, dirname(process.execPath), PROJECT_BIN_DIR]),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   n8nProc.stdout.pipe(logStream);
@@ -663,7 +679,7 @@ async function main() {
 
     const uiProc = spawn(process.execPath, ['serve-review-assets.mjs'], {
       cwd: UI_DIR,
-      env: {
+      env: withPrependedPath({
         ...process.env,
         PROJECT_ROOT,                              // script/config root (dist or source)
         AI_VIDEO_RUNTIME_ROOT: RUNTIME_ROOT,
@@ -678,7 +694,7 @@ async function main() {
         // dev does not. AI_VIDEO_LICENSE_BYPASS / _PUBLIC_KEY pass through via ...process.env
         // (dev + image/video smoke set BYPASS=1; CI gate smoke sets a test public key).
         AI_VIDEO_LICENSE_REQUIRED: process.env.AI_VIDEO_LICENSE_REQUIRED || (_IS_DIST ? '1' : ''),
-      },
+      }, [RUNTIME_BIN_DIR, dirname(process.execPath), PROJECT_BIN_DIR]),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     uiProc.stdout.pipe(logStream);

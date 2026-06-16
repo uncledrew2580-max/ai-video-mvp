@@ -681,7 +681,23 @@ function getConfiguredWorkspaceHost() {
 }
 
 function renderProductFormPage(errorMessage = '') {
-  const taskOptions = ['种草', '口播', '开箱', '产品展示', '痛点前置', '真实故事剧情', '爆点故事剧情', '自由创作'];
+  const taskOptions = [
+    '种草',
+    '口播',
+    '产品展示',
+    '产品卖点展示',
+    '服装产品展示',
+    'OOTD穿搭展示',
+    '穿搭展示',
+    '上身试穿展示',
+    '开箱',
+    '开箱展示',
+    '沉浸式开箱',
+    '痛点前置',
+    '真实故事剧情',
+    '爆点故事剧情',
+    '自由创作',
+  ];
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>

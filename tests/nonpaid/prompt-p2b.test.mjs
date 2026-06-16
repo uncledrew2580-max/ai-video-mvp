@@ -504,6 +504,33 @@ function assertBoth(label, fn) {
   console.log('PASS [18] universal routes + 8-second clip protocol protected');
 }
 
+// ═══ [19] Creative task type options visible in both intake surfaces ════════
+{
+  const requiredOptions = [
+    '产品卖点展示',
+    '服装产品展示',
+    'OOTD穿搭展示',
+    '穿搭展示',
+    '上身试穿展示',
+    '开箱展示',
+    '沉浸式开箱',
+  ];
+
+  const wf01 = loadWf(N8N01);
+  const formNode = wf01.nodes?.find((node) => node.name === 'On form submission');
+  const field = formNode?.parameters?.formFields?.values?.find((item) => item.fieldName === 'creative_task_type');
+  const n8nOptions = (field?.fieldOptions?.values || []).map((item) => item.option);
+  for (const option of requiredOptions) {
+    assert.ok(n8nOptions.includes(option), `WF01 creative_task_type dropdown must expose "${option}"`);
+  }
+
+  const reviewServer = fs.readFileSync(path.join(ROOT, '版本测试', 'serve-review-assets.mjs'), 'utf8');
+  for (const option of requiredOptions) {
+    assert.ok(reviewServer.includes(`'${option}'`), `review intake page taskOptions must expose "${option}"`);
+  }
+  console.log('PASS [19] creative task type options visible in UI + n8n form');
+}
+
 // ── Summary ──────────────────────────────────────────────────────────────────
 console.log('');
-console.log('prompt-p2b nonpaid tests: ALL PASS (18/18)');
+console.log('prompt-p2b nonpaid tests: ALL PASS (19/19)');
