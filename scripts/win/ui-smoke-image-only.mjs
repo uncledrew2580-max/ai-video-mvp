@@ -1378,7 +1378,9 @@ async function main() {
   }, TOTAL_MS);
   if (typeof watchdog.unref === 'function') watchdog.unref();
 
-  const exe = path.join(STAGE, 'AI Video.exe');
+  const exe = process.env.AI_VIDEO_APP_EXECUTABLE
+    ? path.resolve(process.env.AI_VIDEO_APP_EXECUTABLE)
+    : path.join(STAGE, 'AI Video.exe');
   if (!fs.existsSync(exe)) {
     fail('app_binary_missing', new Error(`AI Video.exe not found at ${exe}`), apiKey);
     return;

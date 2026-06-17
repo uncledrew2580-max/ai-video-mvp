@@ -5684,7 +5684,7 @@ function renderConfigPage(saved = false, error = '') {
         } else {
           const display = document.getElementById('output-base-display');
           const current = display ? display.textContent.trim() : '';
-          const pathText = prompt('请输入新的保存位置路径（可直接粘贴 Windows 路径）。\n例如：C:\\Users\\你的用户名\\Videos\\AI Video Outputs', current);
+          const pathText = prompt('请输入新的保存位置路径（可直接粘贴 Windows 路径）。\\n例如：C:\\\\Users\\\\你的用户名\\\\Videos\\\\AI Video Outputs', current);
           if (pathText == null || !pathText.trim()) {
             showMsg('已取消更改保存位置。', true);
             return;
