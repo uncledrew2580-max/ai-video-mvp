@@ -19,6 +19,7 @@ const PC2_PATH  = path.join(ROOT, '版本测试', 'prompts', 'prompt_center.json
 const N8N01     = path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n01.json');
 const N8N02B    = path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n02b.json');
 const N8N02A    = path.join(ROOT, '正式导入文件', 'iteration-v1', 'n8n02a.json');
+const SERVE     = path.join(ROOT, '版本测试', 'serve-review-assets.mjs');
 
 function loadPc(p)  { return JSON.parse(fs.readFileSync(p, 'utf8')); }
 function loadWf(p)  { return JSON.parse(fs.readFileSync(p, 'utf8')); }
@@ -344,28 +345,41 @@ function assertBoth(label, fn) {
   const directorReq = wfNodeCode(wf01, '导演请求体组装');
   const conceptExtract = wfNodeCode(wf01, '创意方向提取');
   const saveConcept = wfNodeCode(wf01, '保存创意方向上下文');
-  assert.ok(loadImages.includes('for (let i = 0; i < maxImages; i++)'),
-    'WF01 must preserve all uploaded images up to the UI max');
+  assert.ok(loadImages.includes('const maxImages = allBinaryKeys.length;') &&
+            loadImages.includes('for (let i = 0; i < maxImages; i++)'),
+    'WF01 must preserve all uploaded images without a fixed image-count cap');
   assert.ok(loadImages.includes('primary_product_reference') && loadImages.includes('supporting_detail_reference'),
     'WF01 must tag primary vs supporting product references');
   assert.ok(directorReq.includes('collectImageParts') && directorReq.includes('product_images_json'),
     'WF01 director request must send dynamic image parts and image metadata');
+  assert.ok(!directorReq.includes('Math.min(Number(input.product_image_count ?? input.image_count ?? 0), 5)'),
+    'WF01 director request must not hard-cap uploaded images at 5');
   assert.ok(conceptExtract.includes('input.product_image_local_paths.length > 0'),
     'WF01 concept extraction must keep a single uploaded image path, not require >=2');
   assert.ok(conceptExtract.includes('directPaths.length > 0'),
     'WF01 concept extraction must keep one image from product_images_meta');
   assert.ok(saveConcept.includes('product_image_count') && saveConcept.includes('product_consistency_rule'),
     'WF01 concept context must retain image count and product consistency rule');
+  const serveCode = fs.readFileSync(SERVE, 'utf8');
+  const rerunDirectorIdx = serveCode.indexOf('function rerunDirectorConcepts');
+  assert.ok(rerunDirectorIdx > 0, 'serve must expose rerunDirectorConcepts for revised creative directions');
+  const rerunDirectorBlock = serveCode.slice(rerunDirectorIdx, rerunDirectorIdx + 2500);
+  assert.ok(rerunDirectorBlock.includes('const uniqueImagePaths = [...new Set(imagePaths)].filter(p => fs.existsSync(p));'),
+    'creative-direction rerun must keep all recorded product images');
+  assert.ok(!rerunDirectorBlock.includes('slice(0, 5)'),
+    'creative-direction rerun must not hard-cap uploaded images at 5');
 
   const wf02a = loadWf(N8N02A);
   const scriptReq = wfNodeCode(wf02a, '脚本请求体组装');
   const scriptSave = wfNodeCode(wf02a, '写脚本框架上下文');
   assert.ok(scriptReq.includes('for (let i = 0; i < imageCount; i++)'),
     'WF02A script request must loop through uploaded images, not hardcode only image_1/image_2');
+  assert.ok(!scriptReq.includes('), 5);'),
+    'WF02A script request must not hard-cap uploaded product images at 5');
   assert.ok(scriptReq.includes('product_images_json') && scriptReq.includes('产品一致性硬规则'),
     'WF02A script request must inject product image metadata and identity rules');
-  assert.ok(scriptSave.includes('image_5_path') && scriptSave.includes('product_consistency_rule'),
-    'WF02A script context must preserve up to five image paths plus product consistency rule');
+  assert.ok(scriptSave.includes('product_image_local_paths') && scriptSave.includes('product_consistency_rule'),
+    'WF02A script context must preserve dynamic image paths plus product consistency rule');
 
   const wf02b = loadWf(N8N02B);
   const storyboardReq = wfNodeCode(wf02b, 'Code in JavaScript1');
@@ -373,6 +387,8 @@ function assertBoth(label, fn) {
   const nanoAssemble = wfNodeCode(wf02b, '组装NanoBanana执行字段');
   assert.ok(storyboardReq.includes('for (let i = 0; i < imageCount; i++)'),
     'WF02B storyboard prompt request must loop through uploaded images');
+  assert.ok(!storyboardReq.includes('), 5);'),
+    'WF02B storyboard prompt request must not hard-cap uploaded product images at 5');
   assert.ok(storyboardReq.includes('product_images_json') && storyboardReq.includes('产品一致性硬规则'),
     'WF02B storyboard prompt request must inject product image metadata and identity rules');
   assert.ok(localImages.includes('fallback_primary_product_reference') &&

@@ -626,6 +626,20 @@ function apiKeyConfigured(filePath) {
   } catch { return false; }
 }
 
+function openPathInSystem(targetPath) {
+  const p = String(targetPath || '').trim();
+  if (!p) throw new Error('missing path');
+  if (process.platform === 'win32') {
+    execFileSync('explorer.exe', [p], { timeout: 5000, windowsHide: true });
+    return;
+  }
+  if (process.platform === 'darwin') {
+    execFileSync('/usr/bin/open', [p], { timeout: 5000 });
+    return;
+  }
+  execFileSync('xdg-open', [p], { timeout: 5000 });
+}
+
 function formatElapsed(ms) {
   if (ms <= 0) return '';
   const s = Math.floor(ms / 1000);
@@ -2603,13 +2617,13 @@ function rerunDirectorConcepts(contextPath, freeFormRequirement = '') {
   const projectNotes = readProjectNotes(projectId);
   const conceptRevisions = readConceptRevisionState(projectId);
 
-  // Collect images — 1 to 5, at least 1 required for real model request
+  // Collect all recorded images; at least 1 is required for a real model request.
   const imagePaths = [
     context.image_1_path,
     context.image_2_path,
     ...(Array.isArray(context.product_image_local_paths) ? context.product_image_local_paths : []),
   ].filter(Boolean);
-  const uniqueImagePaths = [...new Set(imagePaths)].filter(p => fs.existsSync(p)).slice(0, 5);
+  const uniqueImagePaths = [...new Set(imagePaths)].filter(p => fs.existsSync(p));
   if (uniqueImagePaths.length === 0) {
     throw new Error('当前项目没有记录产品图片，请重新上传至少一张产品图后再重新生成创意方向。');
   }
@@ -8638,7 +8652,7 @@ const server = http.createServer(async (req, res) => {
           return res.end(JSON.stringify({ ok: false, error: `输出目录不可写，请检查权限或更改保存位置。`, path: _expanded }));
         }
         try {
-          execFileSync('/usr/bin/open', [_expanded], { timeout: 5000 });
+          openPathInSystem(_expanded);
         } catch {
           res.writeHead(500, _hdr);
           return res.end(JSON.stringify({ ok: false, error: `打开输出文件夹失败。`, path: _expanded }));
