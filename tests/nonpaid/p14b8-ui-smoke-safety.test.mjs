@@ -1223,7 +1223,7 @@ test('B8Z: no hardcoded API key, no key in workflow/code; Veo/video/final defens
   assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');
 });
 
-// ── P14-B8AB: task-runner "Offer expired" diagnostics (read-only, no fix yet) ──
+// ── P14-B8AB: task-runner "Offer expired" diagnostics + launcher slow-start guard ──
 
 const taskRunnerFn = () => {
   const src = readUi();
@@ -1249,10 +1249,11 @@ test('B8AB: task-runner diagnostics parse n8n.log offer/reject stats (counts + r
   assert.ok(/redactString\(m\[2\]\)/.test(fn), 'reject reasons must be redacted');
 });
 
-test('B8AB: diagnostics record the HARDCODED, non-configurable 5s offer window finding', () => {
+test('B8AB: diagnostics record upstream 5s window and launcher 60s target', () => {
   const fn = taskRunnerFn();
-  assert.ok(/offer_valid_time_ms_hardcoded: 5000/.test(fn), 'must record the hardcoded 5s offer window');
-  assert.ok(/offer_window_configurable: false/.test(fn), 'must record that the offer window is NOT env-configurable');
+  assert.ok(/offer_valid_time_ms_upstream_default: 5000/.test(fn), 'must record the upstream 5s offer window');
+  assert.ok(/offer_valid_time_ms_target: 60000/.test(fn), 'must record the launcher 60s target');
+  assert.ok(/offer_window_patched_by_launcher/.test(fn), 'must report whether the launcher patch appeared in n8n.log');
 });
 
 test('B8AB: concept-output diagnostics capture the UI status + /active state + concept count', () => {
@@ -1276,11 +1277,15 @@ test('B8AB: the new diagnostics are READ-ONLY and never leak secrets', () => {
   assert.ok(/redactString\(JSON\.stringify\(raw\)\)\.slice\(0, 800\)/.test(co), 'the wf01-status response is redacted + truncated');
 });
 
-test('B8AB: this phase changes ONLY ui-smoke diagnostics — no launcher/WF01/runner-config edits here', () => {
-  // The fix scope is diagnostics-only; the launcher n8n runner env block is unchanged
-  // (still TASK_TIMEOUT/TASK_REQUEST_TIMEOUT only — the real runner fix is a later phase).
+test('B8AB: launcher extends n8n task-runner offer window before starting n8n', () => {
   const launcher = fs.readFileSync(path.join(ROOT, 'client', 'launcher.mjs'), 'utf8');
   assert.ok(/N8N_RUNNERS_TASK_TIMEOUT: '900'/.test(launcher), 'launcher runner env unchanged in this phase');
+  assert.ok(/TASK_RUNNER_OFFER_VALID_TIME_MS/.test(launcher), 'launcher must define the offer-window target');
+  assert.ok(/patchTaskRunnerOfferWindow/.test(launcher), 'launcher must patch the n8n task-runner offer window');
+  assert.ok(/OFFER_VALID_TIME_MS = 5000/.test(launcher), 'patch must target the upstream 5s constant');
+  assert.ok(/patched to \$\{TASK_RUNNER_OFFER_VALID_TIME_MS\}ms/.test(launcher), 'patch must log when it applies');
+  assert.ok(/if \(!n8nAlreadyUp\) \{[\s\S]{0,120}patchTaskRunnerOfferWindow\(\)/.test(launcher),
+    'patch must run immediately before launching a new n8n process');
   // Stop-proof flags intact.
   const src = readUi();
   assert.ok(/video_generation_skipped: true/.test(src) && /veo_not_called: true/.test(src), 'Veo/video stop-proof flags intact');

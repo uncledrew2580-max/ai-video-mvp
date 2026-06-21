@@ -63,6 +63,10 @@ const PROJECT_BIN_DIR = join(PROJECT_ROOT, 'bin');
 
 const N8N_PORT = Number(process.env.N8N_PORT || 5678);
 const N8N_RUNNERS_BROKER_PORT = Number(process.env.N8N_RUNNERS_BROKER_PORT || N8N_PORT + 1);
+const TASK_RUNNER_OFFER_VALID_TIME_MS = (() => {
+  const value = Number(process.env.AI_VIDEO_TASK_RUNNER_OFFER_VALID_TIME_MS || 60000);
+  return Number.isFinite(value) && value >= 10000 ? Math.floor(value) : 60000;
+})();
 // Client-owned UI port: 18788 for dist app, 8788 for source dev.
 // detect dist by checking if this launcher lives inside a .app bundle or /dist/
 const UI_PORT = Number(process.env.REVIEW_ASSET_PORT || (_IS_DIST ? 18788 : 8788));
@@ -94,6 +98,34 @@ function withPrependedPath(baseEnv, entries) {
   const currentPath = baseEnv[pathKey] || baseEnv.PATH || baseEnv.Path || '';
   env[pathKey] = [...entries, currentPath].filter(Boolean).join(delimiter);
   return env;
+}
+
+function patchTaskRunnerOfferWindow() {
+  const target = join(PROJECT_ROOT, 'node_modules', '@n8n', 'task-runner', 'dist', 'task-runner.js');
+  if (!existsSync(target)) return;
+
+  try {
+    const source = readFileSync(target, 'utf8');
+    const desiredLine = `const OFFER_VALID_TIME_MS = ${TASK_RUNNER_OFFER_VALID_TIME_MS};`;
+    if (source.includes(desiredLine)) {
+      log(`n8n task runner offer window: ${TASK_RUNNER_OFFER_VALID_TIME_MS}ms ✓`);
+      return;
+    }
+
+    const originalLine = 'const OFFER_VALID_TIME_MS = 5000;';
+    if (!source.includes(originalLine)) {
+      warn('n8n task runner offer window patch skipped: upstream constant not found.');
+      return;
+    }
+
+    writeFileSync(target, source.replace(
+      originalLine,
+      `${desiredLine} // AI Video Windows slow-start guard`,
+    ));
+    log(`n8n task runner offer window patched to ${TASK_RUNNER_OFFER_VALID_TIME_MS}ms ✓`);
+  } catch (error) {
+    warn(`n8n task runner offer window patch skipped: ${error.message || String(error)}`);
+  }
 }
 
 /** 检查端口是否有服务在监听。返回 'free' 或 'busy' */
@@ -609,6 +641,7 @@ async function main() {
 
   // ─── 启动 n8n ──────────────────────────────────────────────────────────────
   if (!n8nAlreadyUp) {
+    patchTaskRunnerOfferWindow();
     let n8nProc = await startN8n(n8nBin, children, { watchdog: false });
     // Create and migrate the DB first, then stop n8n before writing workflows.
     // SQLite can be locked while n8n is running, and active webhooks are only

@@ -608,8 +608,8 @@ function collectWf01ExecutionDiagnostics(report) {
 }
 
 // B8AB: read-only n8n JS Task Runner offer/reject stats from the launcher n8n.log.
-// Counts only + redacted reasons — no secrets. Notes the HARDCODED 5s offer window
-// (OFFER_VALID_TIME_MS in @n8n/task-runner — not env-configurable in n8n 2.16.x).
+// Counts only + redacted reasons — no secrets. The launcher patches n8n's default
+// 5s offer window to tolerate slow Windows cold starts before the first Code node.
 function collectTaskRunnerDiagnostics(report) {
   const D = {
     task_runner_mode: 'internal_js',
@@ -624,8 +624,9 @@ function collectTaskRunnerDiagnostics(report) {
     offer_expired_count: 0,
     code_node_tasks_seen: 0,
     runner_config_redacted: {
-      offer_valid_time_ms_hardcoded: 5000,
-      offer_window_configurable: false,
+      offer_valid_time_ms_upstream_default: 5000,
+      offer_valid_time_ms_target: 60000,
+      offer_window_patched_by_launcher: null,
       max_concurrency_default: 10,
       heartbeat_interval_default_s: 30,
       task_timeout_s_launcher: 900,
@@ -650,6 +651,8 @@ function collectTaskRunnerDiagnostics(report) {
     const regIdx = reg ? log.indexOf(reg[0]) : -1;
     const firstTaskMatch = log.search(/Task \([^)]+\)/);
     D.runner_ready_before_first_task = (regIdx >= 0 && firstTaskMatch >= 0) ? (regIdx < firstTaskMatch) : null;
+    D.runner_config_redacted.offer_window_patched_by_launcher =
+      /task runner offer window (?:patched to|:) 60000ms/i.test(log);
   } catch (e) { D.error = redactString(String(e.message || e)).slice(0, 150); }
   report.task_runner_diagnostics = D;
 }
